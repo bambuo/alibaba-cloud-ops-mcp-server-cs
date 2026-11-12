@@ -118,6 +118,8 @@ MCP 客户端配置（本地工具安装后）：
 }
 ```
 
+stdio、HTTP、Docker、白名单与部署模式的完整配置见 [docs/功能/05-MCP客户端配置示例.md](docs/功能/05-MCP客户端配置示例.md)。
+
 ## 配置与凭证
 
 优先级：HTTP 请求头 `x-acs-accesskey-id` / `x-acs-accesskey-secret` / `x-acs-security-token` > 环境变量 > `Aliyun.Credentials` 默认凭证链。`--headers-credential-only` 启用后不回退。配置只描述字段，不写入真实凭据。
@@ -143,6 +145,7 @@ node ~/.agents/skills/requirement-docs/scripts/check-docs.mjs \
 - [docs/README.md](docs/README.md)：目录约定与总索引
 - [docs/架构全景图.md](docs/架构全景图.md)：系统边界与运行时链路
 - [docs/功能/02-功能清单.md](docs/功能/02-功能清单.md)：40 个工具的清点口径
+- [docs/功能/05-MCP客户端配置示例.md](docs/功能/05-MCP客户端配置示例.md)：stdio/HTTP/Docker 客户端配置与排障
 - [docs/需求/0927/](docs/需求/0927/)：C# 重写需求五件套
 
 ## 已知限制
