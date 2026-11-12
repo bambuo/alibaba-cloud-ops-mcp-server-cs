@@ -26,6 +26,13 @@ public sealed class EndpointResolverTests
     }
 
     [Fact]
+    public void Domestic_environment_uses_domestic_billing_endpoint_for_any_region()
+    {
+        Assert.Equal("business.aliyuncs.com",
+            Resolver().Resolve("bssopenapi", "ap-southeast-1"));
+    }
+
+    [Fact]
     public void International_environment_uses_international_billing_endpoint()
     {
         Assert.Equal("business.ap-southeast-1.aliyuncs.com",

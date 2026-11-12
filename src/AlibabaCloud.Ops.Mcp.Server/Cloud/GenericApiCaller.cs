@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace AlibabaCloud.Ops.Mcp.Server.Cloud;
 
 /// <summary>以 OpenAPI 泛化调用执行任意阿里云 RPC/ROA 接口。</summary>
-public sealed class GenericApiCaller(
+public class GenericApiCaller(
     ApiMetaClient metaClient,
     EndpointResolver endpointResolver,
     ICredentialProvider credentialProvider,
@@ -31,7 +31,7 @@ public sealed class GenericApiCaller(
         CallAsync(service, api, parameters, null, cancellationToken);
 
     /// <summary>发起调用；endpointOverride 用于 CMS 等固定 metrics 端点的服务。</summary>
-    public async Task<JsonNode?> CallAsync(
+    public virtual async Task<JsonNode?> CallAsync(
         string service,
         string api,
         IReadOnlyDictionary<string, JsonElement> parameters,

@@ -35,7 +35,7 @@ public sealed class OosExecutor(
         if (string.IsNullOrWhiteSpace(executionId))
         {
             logger.LogWarning("StartExecution returned no ExecutionId for template {Template}", templateName);
-            return startResponse;
+            return Body(startResponse);
         }
 
         var deadline = timeProvider.GetUtcNow() + timeout;
@@ -59,10 +59,13 @@ public sealed class OosExecutor(
                     throw new CloudApiException("OOSExecutionFailed", message);
                 }
 
-                return pollResponse;
+                return Body(pollResponse);
             }
         }
 
         throw new CloudApiException("ExecutionTimeout", $"Execution {executionId} did not finish within {timeout.TotalSeconds:0} seconds");
     }
+
+    /// <summary>对齐上游：工具返回 ListExecutions 的 body，而不是完整响应包裹。</summary>
+    internal static JsonNode? Body(JsonNode? response) => ToolResults.Find(response, "body") ?? response;
 }

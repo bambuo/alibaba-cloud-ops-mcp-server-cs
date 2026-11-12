@@ -80,7 +80,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     public Task<CallToolResult> GetDiskTotalData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
-        CancellationToken cancellationToken = default) => GetMetricAsync(RegionId, InstanceIds, "disk_totalspace", cancellationToken);
+        CancellationToken cancellationToken = default) => GetMetricAsync(RegionId, InstanceIds, "diskusage_total", cancellationToken);
 
     /// <summary>读取 ECS 实例已用磁盘空间。</summary>
 
@@ -89,7 +89,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     public Task<CallToolResult> GetDiskUsedData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
-        CancellationToken cancellationToken = default) => GetMetricAsync(RegionId, InstanceIds, "disk_usedspace", cancellationToken);
+        CancellationToken cancellationToken = default) => GetMetricAsync(RegionId, InstanceIds, "diskusage_used", cancellationToken);
 
     /// <summary>查询指定指标最近一次数据点并返回原始 JSON。</summary>
     private async Task<CallToolResult> GetMetricAsync(

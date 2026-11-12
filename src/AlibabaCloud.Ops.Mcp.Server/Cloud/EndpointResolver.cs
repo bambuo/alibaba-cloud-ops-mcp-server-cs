@@ -36,7 +36,8 @@ public sealed class EndpointResolver(ServerOptions options)
                 return "business.ap-southeast-1.aliyuncs.com";
             }
 
-            return BssDomesticRegions.Contains(regionId)
+            // 与上游一致：domestic 环境不区分地域，一律使用国内端点。
+            return BssDomesticRegions.Contains(regionId) || options.Environment == CloudEnvironment.Domestic
                 ? "business.aliyuncs.com"
                 : "business.ap-southeast-1.aliyuncs.com";
         }

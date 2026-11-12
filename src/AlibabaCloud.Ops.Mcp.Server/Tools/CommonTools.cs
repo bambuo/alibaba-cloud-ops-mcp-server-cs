@@ -78,7 +78,7 @@ public sealed partial class CommonTools(ServerOptions options, ApiMetaClient met
         try
         {
             var meta = await metaClient.GetApiMetaAsync(service, api, cancellationToken);
-            return ToolResults.Text(JsonSerializer.SerializeToNode(meta));
+            return ToolResults.Text(JsonSerializer.SerializeToNode(meta.Parameters));
         }
         catch (Exception exception)
         {

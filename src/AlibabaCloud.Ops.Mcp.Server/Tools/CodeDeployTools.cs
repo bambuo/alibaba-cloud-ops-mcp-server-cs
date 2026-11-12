@@ -18,6 +18,7 @@ public sealed class CodeDeployTools(
     ILogger<CodeDeployTools> logger)
 {
     private const string ManagementRegion = "cn-hangzhou";
+    private static string? _projectRoot;
 
     private static readonly Dictionary<string, string> PackageMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -50,12 +51,13 @@ public sealed class CodeDeployTools(
         try
         {
             var projectRoot = ResolveProjectRoot(project_path, file_path);
+            _projectRoot = projectRoot;
             var releaseDirectory = Path.Combine(projectRoot, ".code_deploy", "release");
             Directory.CreateDirectory(releaseDirectory);
 
             if (instance_ids is null || instance_ids.Count == 0)
             {
-                return ToolResults.Text(BuildInstanceRequired());
+                return ToolResults.Text(BuildInstanceRequired(deploy_region_id, port));
             }
 
             var existing = await DescribeInstancesAsync(deploy_region_id, instance_ids, cancellationToken);
@@ -147,15 +149,20 @@ public sealed class CodeDeployTools(
             SaveApplicationInfo(projectRoot, name, application_group_name, deploy_region_id, port, instance_ids);
 
             var serviceLink = $"https://ecs.console.aliyun.com/app/detail?tabKey=overview&appName={name}&groupName={application_group_name}";
+            var instanceId = instance_ids.FirstOrDefault();
+            var securityGroupLink = instanceId is null
+                ? $"https://ecs.console.aliyun.com/securityGroup/region/{deploy_region_id}"
+                : $"https://ecs.console.aliyun.com/server/{instanceId}/group?regionId={deploy_region_id}#/";
             return ToolResults.Text(new JsonObject
             {
                 ["response"] = response?.DeepClone(),
                 ["service_link"] = serviceLink,
+                ["security_group_link"] = securityGroupLink,
                 ["port"] = port,
                 ["deploy_region_id"] = deploy_region_id,
                 ["bucket_name"] = bucket,
-                ["oss_object"] = object_name,
-                ["revision_id"] = revisionId,
+                ["oss_bucket_link"] = $"https://oss.console.aliyun.com/bucket/oss-cn-hangzhou/{bucket}/object",
+                ["security_group_instructions"] = SecurityGroupInstructions(port, serviceLink, securityGroupLink),
             });
         }
         catch (Exception exception)
@@ -182,7 +189,38 @@ public sealed class CodeDeployTools(
                 ["ApplicationName"] = JsonSerializer.SerializeToElement(name),
                 ["Name"] = JsonSerializer.SerializeToElement(application_group_name),
             };
-            return ToolResults.Text(await caller.CallAsync("oos", "GetApplicationGroup", arguments, cancellationToken));
+            var response = await caller.CallAsync("oos", "GetApplicationGroup", arguments, cancellationToken);
+            var body = ToolResults.Find(response, "body");
+            var group = ToolResults.Find(body, "ApplicationGroup");
+            var status = ToolResults.Find(group, "Status")?.GetValue<string>();
+            var executionId = ToolResults.Find(group, "ExecutionId")?.GetValue<string>();
+
+            JsonNode? executionInfo = null;
+            if (!string.IsNullOrWhiteSpace(executionId))
+            {
+                try
+                {
+                    var pollArguments = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["RegionId"] = JsonSerializer.SerializeToElement(ManagementRegion),
+                        ["ExecutionId"] = JsonSerializer.SerializeToElement(executionId),
+                    };
+                    var executions = await caller.CallAsync("oos", "ListExecutions", pollArguments, cancellationToken);
+                    executionInfo = OosExecutor.Body(executions)?.DeepClone();
+                }
+                catch (Exception exception)
+                {
+                    logger.LogDebug("ListExecutions failed for {ExecutionId}: {Message}", executionId, exception.Message);
+                }
+            }
+
+            return ToolResults.Text(new JsonObject
+            {
+                ["info"] = body?.DeepClone(),
+                ["status"] = status,
+                ["execution_id"] = executionId,
+                ["deploy_execution_info"] = executionInfo,
+            });
         }
         catch (Exception exception)
         {
@@ -200,7 +238,8 @@ public sealed class CodeDeployTools(
     {
         try
         {
-            var statePath = Path.Combine(Directory.GetCurrentDirectory(), ".code_deploy", ".application.json");
+            var root = _projectRoot ?? Directory.GetCurrentDirectory();
+            var statePath = Path.Combine(root, ".code_deploy", "application.json");
             if (!File.Exists(statePath))
             {
                 return Task.FromResult(ToolResults.Text(new JsonObject
@@ -310,11 +349,15 @@ public sealed class CodeDeployTools(
             await caller.CallAsync("oos", api, arguments, cancellationToken);
             return true;
         }
-        catch (CloudApiException)
+        catch (CloudApiException exception) when (IsMissingEntity(exception))
         {
             return false;
         }
     }
+
+    /// <summary>仅把 EntityNotExists.* 视为不存在，其余云端错误继续上抛。</summary>
+    internal static bool IsMissingEntity(CloudApiException exception) =>
+        exception.Message.Contains("EntityNotExists", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>创建应用分组并指定部署地域。</summary>
     private async Task CreateApplicationGroupAsync(string name, string groupName, string deployRegion, CancellationToken cancellationToken)
@@ -420,11 +463,40 @@ public sealed class CodeDeployTools(
     }
 
     /// <summary>未提供实例时返回引导用户创建实例的提示。</summary>
-    private static JsonObject BuildInstanceRequired() => new()
+    private static JsonObject BuildInstanceRequired(string regionId, int port)
     {
-        ["error"] = "ECS_INSTANCE_REQUIRED",
-        ["message"] = "ECS instance ID not provided. Please create ECS instances first before deployment.",
-    };
+        var ecsLink = $"https://ecs-buy.aliyun.com/ecs#/custom/prepay/{regionId}?orderSource=buyWizard-console-list";
+        var securityGroupLink = $"https://ecs.console.aliyun.com/securityGroup?regionId={regionId}";
+        var portInfo = port != 0 ? $"port {port}" : "application port";
+        return new JsonObject
+        {
+            ["error"] = "ECS_INSTANCE_REQUIRED",
+            ["message"] = "ECS instance ID not provided. Please create ECS instances first before deployment.",
+            ["region_id"] = regionId,
+            ["ecs_purchase_link"] = ecsLink,
+            ["security_group_link"] = securityGroupLink,
+            ["instructions"] = $"""
+                ## ECS Instance Creation Required
+
+                **Deployment Region**: {regionId}
+
+                ### Step 1: Create ECS Instances
+                Please visit the following link to create ECS instances:
+                [{ecsLink}]({ecsLink})
+
+                After creation, please provide the ECS instance ID list.
+
+                ### Step 2: Configure Security Group (Post-deployment Operation)
+                After deployment, you need to open {portInfo} for the ECS instance's security group. Please visit:
+                [{securityGroupLink}]({securityGroupLink})
+
+                Add inbound rules in the security group rules:
+                - Port range: {port}/{port} (if port is specified)
+                - Protocol type: TCP
+                - Authorized object: 0.0.0.0/0 (or restrict access source as needed)
+                """,
+        };
+    }
 
     /// <summary>返回实例归属校验失败明细。</summary>
     private static JsonObject BuildInstanceNotFound(string regionId, IReadOnlyList<string> provided, IReadOnlyList<string> missing) => new()
@@ -434,7 +506,49 @@ public sealed class CodeDeployTools(
         ["region_id"] = regionId,
         ["missing_instance_ids"] = new JsonArray(missing.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
         ["provided_instance_ids"] = new JsonArray(provided.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+        ["instructions"] = $"""
+            ## ECS Instance Validation Failed
+
+            **Deployment Region**: {regionId}
+
+            **Missing Instance IDs**: {string.Join(", ", missing)}
+
+            **All Provided Instance IDs**: {string.Join(", ", provided)}
+
+            Please verify that:
+            1. The instance IDs are correct
+            2. The instances exist in region {regionId}
+            3. You have permission to access these instances
+
+            You can check your instances at:
+            https://ecs.console.aliyun.com/?regionId={regionId}#/server/instance
+            """,
     };
+
+    /// <summary>生成部署成功后的安全组配置指引。</summary>
+    private static string SecurityGroupInstructions(int port, string serviceLink, string securityGroupLink) => $"""
+        ## Deployment Successful!
+
+        **Service Link**: [View Deployment Details]({serviceLink})
+
+        ### Important: Configure Security Group Rules
+
+        After the application is deployed, you need to open port **{port}** for the ECS instance's security group, otherwise the application will not be accessible from outside.
+
+        **Security Group Management Link**: [{securityGroupLink}]({securityGroupLink})
+
+        **Configuration Steps**:
+        1. Visit the security group management link above
+        2. Find the security group to which your ECS instance belongs
+        3. Click "Configure Rules" → "Add Security Group Rule"
+        4. Configure inbound rule:
+           - **Port range**: {port}/{port}
+           - **Protocol type**: TCP
+           - **Authorized object**: 0.0.0.0/0 (allow all sources, or restrict access source as needed)
+           - **Description**: Application port {port}
+
+        After configuration, the application can be accessed via the ECS instance's public IP and port {port}.
+        """;
 
     /// <summary>推断项目根目录，默认取产物所在目录。</summary>
     private static string ResolveProjectRoot(string? projectPath, string filePath)
@@ -460,7 +574,7 @@ public sealed class CodeDeployTools(
         return Path.GetDirectoryName(Path.GetFullPath(filePath))!;
     }
 
-    /// <summary>把应用与分组信息写入 .code_deploy/.application.json。</summary>
+    /// <summary>把应用与分组信息写入 .code_deploy/application.json。</summary>
     private static void SaveApplicationInfo(
         string projectRoot, string name, string groupName, string deployRegion, int port, IReadOnlyList<string> instanceIds)
     {
@@ -478,6 +592,6 @@ public sealed class CodeDeployTools(
                 ["deploy_time"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             },
         };
-        File.WriteAllText(Path.Combine(directory, ".application.json"), payload.ToJsonString());
+        File.WriteAllText(Path.Combine(directory, "application.json"), payload.ToJsonString());
     }
 }

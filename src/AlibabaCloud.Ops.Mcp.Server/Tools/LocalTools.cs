@@ -22,7 +22,7 @@ public sealed class LocalTools
         try
         {
             var directory = ValidateDirectory(path);
-            var results = new JsonArray();
+            var items = new List<JsonObject>();
 
             var entries = recursive
                 ? directory.EnumerateFileSystemInfos("*", SearchOption.AllDirectories)
@@ -32,7 +32,7 @@ public sealed class LocalTools
             {
                 try
                 {
-                    results.Add(new JsonObject
+                    items.Add(new JsonObject
                     {
                         ["name"] = entry.Name,
                         ["path"] = entry.FullName,
@@ -46,7 +46,14 @@ public sealed class LocalTools
                 }
             }
 
-            return Task.FromResult(ToolResults.Text(results));
+            var ordered = items.OrderBy(item => item["name"]!.GetValue<string>(), StringComparer.Ordinal).ToList();
+            var results = new JsonArray(ordered.Select(item => (JsonNode?)item).ToArray());
+            return Task.FromResult(ToolResults.Text(new JsonObject
+            {
+                ["path"] = directory.FullName,
+                ["items"] = results,
+                ["count"] = ordered.Count,
+            }));
         }
         catch (Exception exception)
         {
@@ -80,17 +87,34 @@ public sealed class LocalTools
                 CreateNoWindow = true,
             };
 
-            if (OperatingSystem.IsWindows())
+            if (shell)
             {
-                startInfo.FileName = "cmd.exe";
-                startInfo.ArgumentList.Add("/c");
-                startInfo.ArgumentList.Add(script);
+                if (OperatingSystem.IsWindows())
+                {
+                    startInfo.FileName = "cmd.exe";
+                    startInfo.ArgumentList.Add("/c");
+                    startInfo.ArgumentList.Add(script);
+                }
+                else
+                {
+                    startInfo.FileName = "/bin/sh";
+                    startInfo.ArgumentList.Add("-c");
+                    startInfo.ArgumentList.Add(script);
+                }
             }
             else
             {
-                startInfo.FileName = "/bin/sh";
-                startInfo.ArgumentList.Add("-c");
-                startInfo.ArgumentList.Add(script);
+                var parts = SplitArguments(script);
+                if (parts.Count == 0)
+                {
+                    return ToolResults.Error("InvalidParameter: script is empty");
+                }
+
+                startInfo.FileName = parts[0];
+                for (var index = 1; index < parts.Count; index++)
+                {
+                    startInfo.ArgumentList.Add(parts[index]);
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(working_directory))
@@ -156,6 +180,74 @@ public sealed class LocalTools
         {
             return Task.FromResult(ToolResults.Error(exception));
         }
+    }
+
+    /// <summary>按 POSIX 规则拆分命令行：支持单双引号包裹与反斜杠转义。</summary>
+    internal static IReadOnlyList<string> SplitArguments(string commandLine)
+    {
+        var arguments = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var hasToken = false;
+        var quote = '\0';
+
+        for (var index = 0; index < commandLine.Length; index++)
+        {
+            var character = commandLine[index];
+            if (quote != '\0')
+            {
+                if (character == quote)
+                {
+                    quote = '\0';
+                }
+                else if (character == '\\' && quote == '"' && index + 1 < commandLine.Length)
+                {
+                    current.Append(commandLine[++index]);
+                }
+                else
+                {
+                    current.Append(character);
+                }
+
+                continue;
+            }
+
+            if (character is '\'' or '"')
+            {
+                quote = character;
+                hasToken = true;
+            }
+            else if (char.IsWhiteSpace(character))
+            {
+                if (hasToken)
+                {
+                    arguments.Add(current.ToString());
+                    current.Clear();
+                    hasToken = false;
+                }
+            }
+            else if (character == '\\' && index + 1 < commandLine.Length)
+            {
+                current.Append(commandLine[++index]);
+                hasToken = true;
+            }
+            else
+            {
+                current.Append(character);
+                hasToken = true;
+            }
+        }
+
+        if (quote != '\0')
+        {
+            throw new ArgumentException("InvalidParameter: unbalanced quotes");
+        }
+
+        if (hasToken)
+        {
+            arguments.Add(current.ToString());
+        }
+
+        return arguments;
     }
 
     /// <summary>校验路径存在且为目录。</summary>

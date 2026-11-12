@@ -16,10 +16,13 @@ public sealed class LocalToolsTests
             await File.WriteAllTextAsync(Path.Combine(directory.FullName, "app.txt"), "hello");
 
             var result = await _tools.ListDirectory(directory.FullName);
-            var payload = JsonNode.Parse(Text(result))!.AsArray();
+            var payload = JsonNode.Parse(Text(result))!.AsObject();
+            var items = payload["items"]!.AsArray();
 
             Assert.False(result.IsError ?? false);
-            var entry = payload.Single(x => x!["name"]!.GetValue<string>() == "app.txt");
+            Assert.Equal(directory.FullName, payload["path"]!.GetValue<string>());
+            Assert.Equal(items.Count, payload["count"]!.GetValue<int>());
+            var entry = items.Single(x => x!["name"]!.GetValue<string>() == "app.txt");
             Assert.Equal("file", entry!["type"]!.GetValue<string>());
             Assert.Equal(5, entry["size"]!.GetValue<long>());
         }
@@ -52,6 +55,30 @@ public sealed class LocalToolsTests
         Assert.False(result.IsError ?? false);
         Assert.Equal(0, payload["exit_code"]!.GetValue<int>());
         Assert.Contains("hello", payload["stdout"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Runs_direct_command_without_shell_when_requested()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await _tools.RunShellScript("/bin/echo \"a b\"", timeout: 10, shell: false);
+        var payload = JsonNode.Parse(Text(result))!;
+
+        Assert.False(result.IsError ?? false);
+        Assert.Equal("a b", payload["stdout"]!.GetValue<string>().Trim());
+    }
+
+    [Theory]
+    [InlineData("echo hello", new[] { "echo", "hello" })]
+    [InlineData("/bin/echo 'a b'", new[] { "/bin/echo", "a b" })]
+    [InlineData("/bin/echo a\\ b", new[] { "/bin/echo", "a b" })]
+    public void Splits_command_line_like_posix_shell(string commandLine, string[] expected)
+    {
+        Assert.Equal(expected, LocalTools.SplitArguments(commandLine));
     }
 
     [Fact]
