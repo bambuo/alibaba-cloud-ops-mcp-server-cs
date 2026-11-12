@@ -226,7 +226,7 @@ public Task<DeployResult> DeployAsync(
 5. 需要导入已有实例时调用 `TagResources` 打标。
 6. 调用 `DeployApplicationGroup`，返回 execution id。
 7. 用 `TimeProvider` 轮询 `ListExecutions`，间隔 1 秒，支持取消与总超时（默认 600 秒）。
-8. 写入 `.code_deploy/.application.json`，返回控制台链接与部署结果。
+8. 写入 `.code_deploy/application.json`，返回控制台链接与部署结果。
 
 启停命令：
 
@@ -327,12 +327,12 @@ public Task<DeployResult> DeployAsync(
 | 项 | 结果 |
 |---|---|
 | 构建 | `dotnet build` 通过，Release 构建干净 |
-| 测试 | 91 项通过，0 失败 |
+| 测试 | 100 项通过，0 失败 |
 | 工具面 | 默认 40、`--services` 44、`--code-deploy` 7、白名单 3（stdio 实测） |
 | 传输 | stdio 与无状态 HTTP 工具面一致：默认 40、白名单 3、`--code-deploy` 7（HTTP 实测） |
 | 版本 | 包版本与 `serverInfo.version` 均为 0.9.27，与上游发布号一致 |
 | 打包 | `dotnet pack` 生成 7.1 MB nupkg；`dotnet tool install` 后可执行，`--transport sse` 退出码 2 |
-| 覆盖率 | ApiMetaClient 100%、EndpointResolver 100%、CredentialProvider 95.5%、ServerOptions 87.9%、ExtraConfigParser 84.6%、DeployRules 行 100.0% / 分支 94.5%、GenericApiCaller 行 98.5% / 分支 92.6% |
+| 覆盖率 | ApiMetaClient 100%、EndpointResolver 100%、CredentialProvider 95.8%、ServerOptions 87.9%、ExtraConfigParser 84.6%、DeployRules 行 100.0% / 分支 94.5%、GenericApiCaller 行 98.5% / 分支 92.6% |
 
 与设计稿的实现差异：
 
@@ -347,7 +347,6 @@ public Task<DeployResult> DeployAsync(
 1. 真实阿里云账号联调 `ECS_DescribeInstances`、`OOS_RunCommand`、`OOS_CodeDeploy`。
 2. HTTP 传输下请求头凭证与 stdio 日志隔离的端到端验证。
 3. OSS 与 CMS 返回结构的真实样例对账。
-4. 初始化 git 仓库并拆分提交。
-5. 八项口径 Q1–Q8 书面确认。
+4. 八项口径 Q1–Q8 书面确认。
 
 验收结论与实测数据见 [0927-CSharp重构云运维MCP服务-方案验收.md](0927-CSharp重构云运维MCP服务-方案验收.md)。本机实现、测试与文档校验已完成；真实账号链路尚未执行。

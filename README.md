@@ -1,6 +1,6 @@
 # Alibaba Cloud Ops MCP Server（C# 版）
 
-> 状态：已实现，本机构建与 91 项测试通过；真账号联调未执行。
+> 状态：已实现，本机构建与 100 项测试通过；真账号联调未执行。
 > 本仓库是 [aliyun/alibaba-cloud-ops-mcp-server](https://github.com/aliyun/alibaba-cloud-ops-mcp-server) v0.9.27（Python，Apache-2.0）的 C# 重写项目，目标为**行为兼容替换**。
 
 ## 项目定位
@@ -64,7 +64,7 @@ flowchart LR
 │   ├── Mcp/                              instructions、动态工具注册、白名单过滤
 │   ├── Tools/                            34 个静态工具与部署规则
 │   └── Resources/                        PromptUnderstanding 原文
-├── tests/AlibabaCloud.Ops.Mcp.Server.Tests/   91 个测试
+├── tests/AlibabaCloud.Ops.Mcp.Server.Tests/   100 个测试
 ├── nupkg/                                dotnet tool 打包产物
 └── docs
     ├── README.md            文档总索引与目录约定

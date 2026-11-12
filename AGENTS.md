@@ -2,7 +2,7 @@
 
 ## 项目性质
 
-本仓库是 `aliyun/alibaba-cloud-ops-mcp-server` v0.9.27 的 C# 重写项目，目标为行为兼容替换。当前阶段：代码已实现，91 项单元测试通过；未做真实账号联调。
+本仓库是 `aliyun/alibaba-cloud-ops-mcp-server` v0.9.27 的 C# 重写项目，目标为行为兼容替换。当前阶段：代码已实现，100 项单元测试通过；未做真实账号联调。
 
 - 上游基线：commit `751a8fd7fa9abeac84bbf86f65175ddd13948a7d`（2026-10-27），版本 0.9.27，Apache-2.0。
 - 保真档位：A 完全替换（40 个工具、schema、`--extra-config` 动态注册全部对齐）。

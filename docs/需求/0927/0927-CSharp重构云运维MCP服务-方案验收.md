@@ -21,7 +21,7 @@
 验收方法：
 
 1. **工具面对账**：在同一启动参数下调用 C# 版 `tools/list`，与上游源码清点的工具集合比较。
-2. **契约测试**：91 项 xUnit 测试覆盖参数解析、端点、凭证、schema、规则引擎、本地工具。
+2. **契约测试**：100 项 xUnit 测试覆盖参数解析、端点、凭证、schema、规则引擎、本地工具。
 3. **行为测试**：真实账号链路未执行。
 4. **安全测试**：stdio 模式下 stdout 协议可解析，日志写 stderr；错误消息经代码审查。
 
@@ -50,7 +50,7 @@
 | F1 | `ECS_DescribeInstances` 真实调用 | 成功 | 未执行 | 未执行 |
 | F2 | `OOS_RunCommand` 真实调用 | 成功 | 未执行 | 未执行 |
 | F3 | `OOS_CodeDeploy` 全链路 | 成功 | 未执行 | 未执行 |
-| G1 | 覆盖率 Cloud/Auth ≥ 80% | 达标 | ApiMeta 100%、Endpoint 100%、Credential 95.5%、Options 87.9%、ExtraConfig 84.6%、GenericApiCaller 行 98.5% / 分支 92.6% | 通过 |
+| G1 | 覆盖率 Cloud/Auth ≥ 80% | 达标 | ApiMeta 100%、Endpoint 100%、Credential 95.8%、Options 87.9%、ExtraConfig 84.6%、GenericApiCaller 行 98.5% / 分支 92.6% | 通过 |
 | G2 | 规则引擎分支 ≥ 90% | 达标 | 分支 94.5% | 通过 |
 | H1 | 文档五件套与索引校验 | 通过 | 两项脚本均通过，14 个文件 0 失败 | 通过 |
 
@@ -70,6 +70,9 @@
 4. OSS V1 SDK 的 `ListObjectsRequest` 构造与 `ListBuckets` 返回类型与预期不同，按实际 API 修正。
 5. 无状态 HTTP 每个请求重建工具集合，启动时注册的动态工具与白名单被丢弃（实测 29 个）；改为在 `McpServerOptions` 的 PostConfigure 阶段回填，修复后默认 40、白名单 3、`--code-deploy` 7。
 6. `Lazy<Task>` 缓存会把一次瞬时元数据失败固定为永久失败，启动期随机缺失动态工具（实测出现 33 与 2）；失败时移出缓存并新增重试回归测试，之后连续实测稳定为 44/40/3。
+7. 与上游逐项对照（`tools/list` schema + Python AST）发现 4 项 P1 偏差并修复：`CMS_GetDiskTotalData` 指标名改为 `diskusage_total`、`CMS_GetDiskUsedData` 改为 `diskusage_used`；`LOCAL_RunShellScript` 的 `shell=false` 改为按 POSIX 规则拆分后直接执行；部署状态改为读写同一项目根并统一文件名 `application.json`。
+8. 同批修复 9 项 P2 契约偏差：`LOCAL_ListDirectory` 返回 `{path, items, count}` 并按名排序；`GetAPIInfo` 只返回参数数组；OOS 工具返回 `body`；`OOS_GetDeployStatus` 返回 `{info, status, execution_id, deploy_execution_info}`；部署成功与实例缺失响应补齐控制台链接和操作指引；bssopenapi 在 domestic 环境下不区分地域；应用/分组探测只把 `EntityNotExists.*` 视为不存在。
+9. 新增 9 项行为测试（CMS 指标与维度、`shell=false` 与命令行拆分、目录返回结构、`GetAPIInfo`、OOS body 解包、存在性判定），测试数由 91 增至 100。
 
 Mermaid 图未做 CLI 渲染，仅通过结构检查，见未完成项。
 
@@ -86,7 +89,7 @@ Mermaid 图未做 CLI 渲染，仅通过结构检查，见未完成项。
 3. Mermaid 图未做 CLI 渲染校验：本机无 `mmdc`。
 4. 上游对照环境缺少 `uv`，未做 Python 与 C# 的双跑 diff。
 5. 八项口径 Q1–Q8 未逐项书面确认，实现按实施方案默认值执行。
-6. git 仓库未初始化，无提交基线。
+6. 审查中的 P3/P4 差异未处理：5 个 CMS 工具与 `OOS_StartRDSInstances` 的描述文案、长参数描述精简、打标策略（全量打标 vs 仅缺失）、损坏压缩包降级为 `unknown`、Golang 启动命令无条件 `|| true`、`OOS_CodeDeploy.project_path` 在 schema 中为可选等。
 
 ## 六、复现步骤
 
