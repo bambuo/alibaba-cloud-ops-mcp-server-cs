@@ -1,0 +1,13 @@
+Alibaba Cloud Ops MCP Server (C#)
+
+This product is a C# reimplementation of alibaba-cloud-ops-mcp-server v0.9.27
+(https://github.com/aliyun/alibaba-cloud-ops-mcp-server), licensed under the
+Apache License, Version 2.0.
+
+Original copyright and license notices are retained in LICENSE. Tool names,
+tool descriptions, server instructions and the PromptUnderstanding text are
+derived from the upstream project and remain under the same license.
+
+Modifications: implementation language and runtime changed from Python to C#;
+HTTP transport, polling, metadata caching and output serialization adapted as
+documented in docs/需求/0927/.

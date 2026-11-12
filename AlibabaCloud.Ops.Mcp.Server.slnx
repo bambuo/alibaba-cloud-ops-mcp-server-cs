@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AlibabaCloud.Ops.Mcp.Server/AlibabaCloud.Ops.Mcp.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AlibabaCloud.Ops.Mcp.Server.Tests/AlibabaCloud.Ops.Mcp.Server.Tests.csproj" />
+  </Folder>
+</Solution>

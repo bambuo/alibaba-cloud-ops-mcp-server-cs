@@ -1,0 +1,10 @@
+bin/
+obj/
+nupkg/
+.code_deploy/
+*.user
+.DS_Store
+.vs/
+.idea/
+TestResults/
+coverage*.xml

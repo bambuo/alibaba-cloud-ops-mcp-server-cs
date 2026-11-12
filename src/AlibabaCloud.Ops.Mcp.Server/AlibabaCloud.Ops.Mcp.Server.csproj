@@ -1,0 +1,42 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AlibabaCloud.Ops.Mcp.Server</RootNamespace>
+    <AssemblyName>AlibabaCloud.Ops.Mcp.Server</AssemblyName>
+    <Version>0.9.27</Version>
+    <LangVersion>latest</LangVersion>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>alibaba-cloud-ops-mcp-server</ToolCommandName>
+    <PackageId>AlibabaCloud.Ops.Mcp.Server</PackageId>
+    <Description>C# implementation of Alibaba Cloud Ops MCP Server</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.4.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+    <PackageReference Include="AlibabaCloud.OpenApiClient" Version="0.2.3" />
+    <PackageReference Include="AlibabaCloud.SDK.Oos20190601" Version="3.8.0" />
+    <PackageReference Include="AlibabaCloud.SDK.Cms20190101" Version="4.0.12" />
+    <PackageReference Include="AlibabaCloud.SDK.Ecs20140526" Version="7.11.9" />
+    <PackageReference Include="Aliyun.Credentials" Version="1.5.4" />
+    <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.14.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AlibabaCloud.Ops.Mcp.Server.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\PROMPT_UNDERSTANDING.md" />
+  </ItemGroup>
+
+</Project>
