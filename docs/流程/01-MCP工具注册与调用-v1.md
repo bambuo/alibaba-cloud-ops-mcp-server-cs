@@ -2,7 +2,7 @@
 
 > 文档编号：01
 > 文档版本：v1
-> 状态：已实现，stdio 与无状态 HTTP 两种传输的工具面均实测通过
+> 状态：已实现，stdio、有状态 HTTP 与 both 三种传输的工具面均实测通过
 > 证据基线：上游 v0.9.27（commit 751a8fd）
 
 ## 目标
@@ -48,7 +48,7 @@ flowchart TD
 
 注册冲突规则：`--code-deploy` 与 `--visible-tools` 同时出现时，前者优先，后者被忽略并记录告警。白名单按名称大小写不敏感匹配静态工具；已命中的静态名称不再参与动态工具解析，因此在白名单模式下 `ECS_DescribeInstances` 使用静态版本的两参数 schema。
 
-实现要点：动态工具与白名单在 `McpServerOptions` 的 PostConfigure 阶段应用；无状态 HTTP 每个请求重建工具集合时按同一规则回填，stdio 只在启动时注册一次。
+实现要点：动态工具与白名单在 `McpServerOptions` 的 PostConfigure 阶段应用；HTTP 传输保留会话（`Stateless=false`），会话建立时按同一规则回填，stdio 只在启动时注册一次。
 
 ## 时序：一次工具调用
 
@@ -73,7 +73,7 @@ sequenceDiagram
         else 参数合法
             R->>P: 解析凭证与端点
             alt 凭证缺失
-                P-->>C: MissingCredentials
+                P-->>C: CredentialMissing
             else 凭证有效
                 R->>G: CallAsync(service, api, params)
                 G->>A: HTTPS 请求

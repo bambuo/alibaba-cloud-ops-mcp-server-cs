@@ -1,6 +1,6 @@
 # Alibaba Cloud Ops MCP Server（C# 版）
 
-> 状态：已实现，本机构建与 104 项测试通过；真账号联调未执行。
+> 状态：已实现，本机构建与 132 项测试通过；只读接口已用真实凭证联调，写操作类未验证。
 > 本仓库是 [aliyun/alibaba-cloud-ops-mcp-server](https://github.com/aliyun/alibaba-cloud-ops-mcp-server) v0.9.27（Python，Apache-2.0）的 C# 重写项目，目标为**行为兼容替换**。
 
 ## 项目定位
@@ -98,6 +98,14 @@ dotnet run --project src/AlibabaCloud.Ops.Mcp.Server -- \
 # 打包为 dotnet tool
 dotnet pack -c Release -o nupkg
 dotnet tool install --tool-path ./tools --add-source ./nupkg AlibabaCloud.Ops.Mcp.Server
+
+# 自包含单文件（无需目标机安装 .NET；RID 按平台替换）
+# IncludeAllContentForSelfExtract 必须开启：AlibabaCloud.OpenApiClient 依赖 Assembly.Location，
+# 纯内存单文件下该值为空，动态 API 调用会抛 "The value cannot be an empty string. (Parameter 'path')"
+dotnet publish src/AlibabaCloud.Ops.Mcp.Server -c Release -r osx-arm64 \
+  --self-contained true -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:IncludeAllContentForSelfExtract=true -p:DebugType=none -o dist/osx-arm64
 ```
 
 MCP 客户端配置（本地工具安装后）：

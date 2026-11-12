@@ -209,7 +209,7 @@ x-acs-accesskey-secret: <AK_SECRET>
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | HTTP 状态码 | number | 200 成功；400 请求非法；401 凭证缺失；405 方法不允许 |
-| `Mcp-Session-Id` | string | 无状态模式下不返回 |
+| `Mcp-Session-Id` | string | HTTP 传输保留会话，服务端在响应头返回 |
 | Body | object 或 SSE 流 | JSON-RPC 响应 |
 
 **响应示例**
@@ -223,21 +223,33 @@ Content-Type: application/json
 
 ## 四、错误文案
 
-| 场景 | `isError` | 文案（前缀固定，便于客户端匹配） |
+失败时 `isError=true`，`content[0].text` 是 JSON 字符串，结构为 `{"Code": "...", "Message": "...", "RequestId": "..."}`（`RequestId` 仅在可取到时出现）。与 Java 版错误契约一致。
+
+| 场景 | `Code` | `Message` |
 |---|---|---|
-| 缺少必填参数 | true | `InvalidParameter: {参数名} is required` |
-| 参数类型错误 | true | `InvalidParameter: {参数名} expects {类型}` |
-| 凭证缺失 | true | `MissingCredentials: no AccessKey found in headers or environment` |
-| 凭证仅允许请求头 | true | `MissingCredentials: headers-credential-only is enabled` |
-| 未知工具 | true | `UnknownTool: {工具名}` |
-| 阿里云拒绝 | true | `{Code}: {Message}` |
-| 本地命令超时 | true | `CommandTimeout: exceeded {秒} seconds` |
-| 本地命令不存在 | true | `CommandNotFound: {命令}` |
-| 文件或目录不存在 | true | `NotFound: {路径}` |
-| 路径不是目录 | true | `InvalidPath: {路径} is not a directory` |
-| 部署失败 | true | `DeployFailed: {statusMessage}` |
-| 传输不支持 | 进程退出 | `UnsupportedTransport: sse is not supported` |
-| 参数 JSON 非法 | 进程退出 | `InvalidArgument: --extra-config expects a JSON object` |
+| 缺少必填参数 | `InvalidParameter` | `{参数名} is required and cannot be empty.` |
+| 本地超时取值非法 | `InvalidParameter` | `timeout must be between 1 and 86400 seconds` |
+| 凭证缺失 | `CredentialMissing` | `No Alibaba Cloud credential available. Configure environment variables, the CLI profile, or an instance RAM role.` |
+| 凭证仅允许请求头 | `CredentialMissing` | `No Alibaba Cloud credential available in request headers.` |
+| 阿里云拒绝 | SDK 原始错误码 | SDK 原始消息，可带 `RequestId` |
+| 元数据不可达 | `DynamicMetaUnavailable` | `Failed to load metadata from {path}: {原因}` |
+| 服务名非法 | `InvalidServiceName` | `InvalidServiceName: Please check the Service ({服务码}) you provide.` |
+| API 名非法 | `InvalidAPIName` | `InvalidAPIName: Please check the Service ({服务码}) and the API ({API}) you provide.` |
+| 本地命令超时 | `Timeout` | `Command execution timeout (exceeded {秒} seconds)` |
+| 本地命令不存在 | `LocalExecutionFailed` | `Command or script not found: {命令}` |
+| 本地执行失败 | `LocalExecutionFailed` | `Failed to execute command: {原因}` |
+| 目录列举失败 | `InvalidParameter` | `Failed to list directory: Invalid path: {路径}` |
+| 部署栈识别失败 | `InvalidParameter` | `Failed to identify deployment method: {原因}` |
+| 产物不存在 | `ResourceNotFound` | `File does not exist: {路径}` |
+| OOS 执行失败 | `Execution.Failed` | `OOS Execution Failed, reason: {StatusMessage}.` |
+| OOS 无执行明细 | `Execution.Failed` | `OOS execution {执行ID} returned no execution detail.` |
+| OOS 轮询超时 | `Timeout` | `OOS execution {执行ID} did not reach a terminal state in {秒} seconds.` |
+| OSS 未开通或建桶失败 | `OssNotActivated` | `OSS service is not activated or the bucket cannot be created: {原因}` |
+| 其他未归类异常 | `InternalError` | 异常消息 |
+| 传输不支持 | 进程退出码 2 | `UnsupportedTransport: sse is not supported` |
+| `--extra-config` 非法 | 不退出 | stderr 打印 `WARN: Failed to parse --extra-config, ignoring it: {原因}` |
+
+部署类业务性失败（缺少实例、实例不存在、缺少启动命令、OSS 未开通）仍按上游返回**正常结构体 + `error` 字段**，`isError=false`，不走上表。
 
 ## 五、注意事项
 
@@ -246,7 +258,7 @@ Content-Type: application/json
 3. 工具命名大小写敏感；`--visible-tools` 匹配不敏感。
 4. `LOCAL_RunShellScript` 会在服务端主机执行任意命令，客户端必须向用户明示风险。
 5. 破坏性工具（删除实例、删除 Bucket、重置密码、更换系统盘、批量执行命令）建议在客户端开启二次确认。
-6. 部署工具耗时较长，客户端超时建议不低于 600 秒，并支持取消。
+6. 部署工具耗时较长，客户端超时建议不低于 900 秒（`--oos-timeout-seconds` 默认值），并支持取消。
 7. OSS 与 CMS 的返回结构是 C# 版重新定义的 JSON，与上游 Python 字符串不同；按字段消费，不要按字符串匹配。
 8. HTTP 模式无内置鉴权，不要直接暴露到公网。
 9. 请求头凭证不会被日志记录；客户端也不应在 URL、查询参数中传递凭证。

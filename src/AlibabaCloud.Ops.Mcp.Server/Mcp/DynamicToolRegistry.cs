@@ -55,19 +55,20 @@ public sealed class DynamicToolRegistry(
         logger.LogInformation("Dynamic tools registered: {Count}", _tools.Count);
     }
 
-    /// <summary>把已创建的工具补进指定集合，按名称去重。</summary>
+    /// <summary>把已创建的工具补进指定集合，按名称忽略大小写去重。</summary>
     public void ApplyTo(McpServerPrimitiveCollection<McpServerTool> collection)
     {
         foreach (var tool in _tools)
         {
-            if (!collection.Any(existing => existing.ProtocolTool.Name == tool.ProtocolTool.Name))
+            if (!collection.Any(existing => string.Equals(
+                    existing.ProtocolTool.Name, tool.ProtocolTool.Name, StringComparison.OrdinalIgnoreCase)))
             {
                 collection.TryAdd(tool);
             }
         }
     }
 
-    /// <summary>计算待注册的「服务码/API」清单：部署模式为空，白名单优先于默认清单。</summary>
+    /// <summary>计算待注册的「服务码/API」清单：部署模式为空，默认清单 + extra-config + 白名单派生项。</summary>
     internal IReadOnlyList<(string Service, string Api)> BuildPlan()
     {
         if (options.CodeDeploy)
@@ -75,29 +76,7 @@ public sealed class DynamicToolRegistry(
             return [];
         }
 
-        var plan = new List<(string Service, string Api)>();
-        if (options.VisibleToolNames.Count > 0)
-        {
-            foreach (var name in options.VisibleToolNames)
-            {
-                if (StaticToolNames.Contains(name))
-                {
-                    continue;
-                }
-
-                var separator = name.IndexOf('_');
-                if (separator <= 0 || separator == name.Length - 1)
-                {
-                    continue;
-                }
-
-                plan.Add((name[..separator].ToLowerInvariant(), name[(separator + 1)..]));
-            }
-
-            return plan;
-        }
-
-        plan.AddRange(DefaultApis);
+        var plan = new List<(string Service, string Api)>(DefaultApis);
 
         if (options.ExtraConfig is not null)
         {
@@ -105,15 +84,37 @@ public sealed class DynamicToolRegistry(
             {
                 foreach (var api in apis)
                 {
-                    if (!plan.Any(x => string.Equals(x.Service, service, StringComparison.OrdinalIgnoreCase)
-                                       && string.Equals(x.Api, api, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        plan.Add((service.ToLowerInvariant(), api));
-                    }
+                    AddIfAbsent(plan, service.ToLowerInvariant(), api);
                 }
             }
         }
 
+        foreach (var name in options.VisibleToolNames)
+        {
+            if (StaticToolNames.Contains(name))
+            {
+                continue;
+            }
+
+            var separator = name.IndexOf('_');
+            if (separator <= 0 || separator == name.Length - 1)
+            {
+                continue;
+            }
+
+            AddIfAbsent(plan, name[..separator].ToLowerInvariant(), name[(separator + 1)..]);
+        }
+
         return plan;
+    }
+
+    /// <summary>服务码与 API 名均忽略大小写去重后追加。</summary>
+    private static void AddIfAbsent(List<(string Service, string Api)> plan, string service, string api)
+    {
+        if (!plan.Any(x => string.Equals(x.Service, service, StringComparison.OrdinalIgnoreCase)
+                           && string.Equals(x.Api, api, StringComparison.OrdinalIgnoreCase)))
+        {
+            plan.Add((service, api));
+        }
     }
 }

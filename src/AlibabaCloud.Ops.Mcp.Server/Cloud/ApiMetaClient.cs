@@ -1,9 +1,8 @@
 using System.Collections.Concurrent;
-using System.Net;
-using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using AlibabaCloud.Ops.Mcp.Server.Cloud;
+using AlibabaCloud.Ops.Mcp.Server.Options;
 using Microsoft.Extensions.Logging;
 
 namespace AlibabaCloud.Ops.Mcp.Server.Cloud;
@@ -34,49 +33,48 @@ public sealed record ApiMeta(
     public string Version { get; init; } = string.Empty;
 }
 
-/// <summary>拉取 `api.aliyun.com/meta/v1` 元数据，按产品与 API 缓存结果。</summary>
-public sealed class ApiMetaClient(HttpClient httpClient, ILogger<ApiMetaClient> logger)
+/// <summary>拉取 `api.aliyun.com/meta/v1` 元数据，按路径缓存并带 TTL 与退避重试。</summary>
+public sealed class ApiMetaClient(
+    HttpClient httpClient,
+    ServerOptions options,
+    TimeProvider timeProvider,
+    ILogger<ApiMetaClient> logger)
 {
     private const string BaseUrl = "https://api.aliyun.com/meta/v1";
-    private readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<ProductInfo>>>> _products = new();
-    private readonly ConcurrentDictionary<string, Lazy<Task<JsonDocument>>> _overviews = new();
-    private readonly ConcurrentDictionary<string, Lazy<Task<ApiMeta>>> _apis = new();
-    private readonly ConcurrentDictionary<string, string> _standardNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
+    private readonly TimeSpan _ttl = TimeSpan.FromSeconds(options.MetaCacheTtlSeconds);
 
-    /// <summary>列出全部云产品（只请求一次，结果缓存）。</summary>
-    public async Task<IReadOnlyList<ProductInfo>> GetProductsAsync(CancellationToken cancellationToken = default) =>
-        await CachedAsync(_products, "products", FetchProductsAsync, cancellationToken);
+    private sealed record CacheEntry(DateTimeOffset ExpiresAt, JsonNode? Value);
 
-    /// <summary>返回产品的默认 API 版本。</summary>
-    public async Task<string?> GetServiceVersionAsync(string service, CancellationToken cancellationToken = default)
+    /// <summary>列出全部云产品。</summary>
+    public async Task<IReadOnlyList<ProductInfo>> GetProductsAsync(CancellationToken cancellationToken = default)
     {
-        var products = await GetProductsAsync(cancellationToken);
-        return products.FirstOrDefault(x => string.Equals(x.Code, service, StringComparison.OrdinalIgnoreCase))?.DefaultVersion;
+        var node = await FetchAsync("products.json", cancellationToken);
+        return node?.Deserialize<List<ProductInfo>>(JsonOptions) ?? [];
     }
 
-    /// <summary>返回产品的调用风格（RPC/ROA），未知时按 RPC。</summary>
+    /// <summary>返回产品的默认 API 版本，未知服务抛 InvalidServiceName。</summary>
+    public async Task<string> GetServiceVersionAsync(string service, CancellationToken cancellationToken = default)
+    {
+        var products = await GetProductsAsync(cancellationToken);
+        var match = products.FirstOrDefault(x => string.Equals(x.Code, service, StringComparison.OrdinalIgnoreCase));
+        return match?.DefaultVersion ?? throw InvalidService(service);
+    }
+
+    /// <summary>返回产品的调用风格（RPC/ROA），空白或未知时按 RPC。</summary>
     public async Task<string> GetServiceStyleAsync(string service, CancellationToken cancellationToken = default)
     {
         var products = await GetProductsAsync(cancellationToken);
-        return products.FirstOrDefault(x => string.Equals(x.Code, service, StringComparison.OrdinalIgnoreCase))?.Style ?? "RPC";
+        var style = products.FirstOrDefault(x => string.Equals(x.Code, service, StringComparison.OrdinalIgnoreCase))?.Style;
+        return string.IsNullOrWhiteSpace(style) ? "RPC" : style;
     }
 
-    /// <summary>把别名归一为元数据中的标准服务码，未知服务抛 <see cref="CloudApiException"/>。</summary>
+    /// <summary>把别名归一为元数据中的标准服务码，未知服务抛 InvalidServiceName。</summary>
     public async Task<string> GetStandardServiceCodeAsync(string service, CancellationToken cancellationToken = default)
     {
-        if (_standardNames.TryGetValue(service, out var cached))
-        {
-            return cached;
-        }
-
         var products = await GetProductsAsync(cancellationToken);
-        var match = products.FirstOrDefault(x => string.Equals(x.Code, service, StringComparison.OrdinalIgnoreCase));
-        if (match is null)
-        {
-            throw new CloudApiException("InvalidServiceName", $"Please check the Service ({service}) you provide.");
-        }
-
-        _standardNames[service] = match.Code;
+        var match = products.FirstOrDefault(x => string.Equals(x.Code, service, StringComparison.OrdinalIgnoreCase))
+                    ?? throw InvalidService(service);
         return match.Code;
     }
 
@@ -84,97 +82,82 @@ public sealed class ApiMetaClient(HttpClient httpClient, ILogger<ApiMetaClient> 
     public async Task<IReadOnlyList<string>> GetApiNamesAsync(string service, CancellationToken cancellationToken = default)
     {
         var standard = await GetStandardServiceCodeAsync(service, cancellationToken);
-        var version = await GetServiceVersionAsync(standard, cancellationToken)
-                      ?? throw new CloudApiException("InvalidServiceName", $"No version found for service ({service}).");
-
-        var overview = await GetOverviewAsync(standard, version, cancellationToken);
-        if (!overview.RootElement.TryGetProperty("apis", out var apis) || apis.ValueKind != JsonValueKind.Object)
+        var version = await GetServiceVersionAsync(standard, cancellationToken);
+        var overview = await FetchAsync($"products/{standard}/versions/{version}/overview.json", cancellationToken);
+        if (overview is not JsonObject obj || obj["apis"] is not JsonObject apis)
         {
             return [];
         }
 
-        return apis.EnumerateObject().Select(x => x.Name).ToList();
+        return apis.Select(x => x.Key).ToList();
     }
 
-    /// <summary>读取单个 API 的元数据（含版本），按服务与 API 缓存。</summary>
+    /// <summary>返回 API 的标准名称（大小写与元数据一致），未找到抛 InvalidAPIName。</summary>
+    public async Task<string> GetStandardApiAsync(string service, string api, CancellationToken cancellationToken = default)
+    {
+        var names = await GetApiNamesAsync(service, cancellationToken);
+        return names.FirstOrDefault(x => string.Equals(x, api, StringComparison.OrdinalIgnoreCase))
+               ?? throw new CloudApiException("InvalidAPIName",
+                   $"InvalidAPIName: Please check the Service ({service.ToLowerInvariant()}) and the API ({api}) you provide.");
+    }
+
+    /// <summary>读取单个 API 的元数据（含版本）。</summary>
     public async Task<ApiMeta> GetApiMetaAsync(string service, string api, CancellationToken cancellationToken = default)
     {
-        var key = $"{service.ToLowerInvariant()}/{api.ToLowerInvariant()}";
-        return await CachedAsync(_apis, key, token => FetchApiMetaAsync(service, api, token), cancellationToken);
-    }
-
-    /// <summary>缓存成功结果；失败项立即移出缓存，避免瞬时故障导致永久不可用。</summary>
-    private static async Task<T> CachedAsync<T>(
-        ConcurrentDictionary<string, Lazy<Task<T>>> cache,
-        string key,
-        Func<CancellationToken, Task<T>> factory,
-        CancellationToken cancellationToken)
-    {
-        var lazy = cache.GetOrAdd(key, _ => new Lazy<Task<T>>(() => factory(cancellationToken)));
-        try
-        {
-            return await lazy.Value;
-        }
-        catch
-        {
-            cache.TryRemove(new KeyValuePair<string, Lazy<Task<T>>>(key, lazy));
-            throw;
-        }
-    }
-
-    /// <summary>请求 products.json 并记录数量。</summary>
-    private async Task<IReadOnlyList<ProductInfo>> FetchProductsAsync(CancellationToken cancellationToken)
-    {
-        var products = await httpClient.GetFromJsonAsync<List<ProductInfo>>(
-            $"{BaseUrl}/products.json", cancellationToken) ?? [];
-        logger.LogDebug("Loaded {Count} products from OpenAPI metadata", products.Count);
-        return products;
-    }
-
-    /// <summary>按服务与版本缓存产品 overview（内含 API 清单）。</summary>
-    private async Task<JsonDocument> GetOverviewAsync(string service, string version, CancellationToken cancellationToken) =>
-        await CachedAsync(
-            _overviews,
-            $"{service}/{version}",
-            token => FetchJsonAsync($"{BaseUrl}/products/{service}/versions/{version}/overview.json", token),
-            cancellationToken);
-
-    /// <summary>解析 API 名、版本与路径，加载 api.json。</summary>
-    private async Task<ApiMeta> FetchApiMetaAsync(string service, string api, CancellationToken cancellationToken)
-    {
         var standard = await GetStandardServiceCodeAsync(service, cancellationToken);
-        var version = await GetServiceVersionAsync(standard, cancellationToken)
-                      ?? throw new CloudApiException("InvalidServiceName", $"No version found for service ({service}).");
-
-        var overview = await GetOverviewAsync(standard, version, cancellationToken);
-        var standardApi = api;
-        if (overview.RootElement.TryGetProperty("apis", out var apis) && apis.ValueKind == JsonValueKind.Object)
-        {
-            standardApi = apis.EnumerateObject()
-                .Select(x => x.Name)
-                .FirstOrDefault(x => string.Equals(x, api, StringComparison.OrdinalIgnoreCase)) ?? api;
-        }
-
-        var url = $"{BaseUrl}/products/{standard}/versions/{version}/apis/{standardApi}/api.json";
-        using var document = await FetchJsonAsync(url, cancellationToken);
-        var meta = document.RootElement.Deserialize<ApiMeta>(JsonOptions)
-                   ?? throw new CloudApiException("InvalidAPIName", $"Please check the API ({api}) you provide.");
+        var standardApi = await GetStandardApiAsync(standard, api, cancellationToken);
+        var version = await GetServiceVersionAsync(standard, cancellationToken);
+        var node = await FetchAsync(
+            $"products/{standard}/versions/{version}/apis/{standardApi}/api.json", cancellationToken);
+        var meta = node?.Deserialize<ApiMeta>(JsonOptions)
+                   ?? throw new CloudApiException("DynamicMetaUnavailable", $"Empty metadata for {standard}.{standardApi}");
         return meta with { Version = version };
     }
 
-    /// <summary>GET 并解析 JSON；404 转换为 InvalidAPIName。</summary>
-    private async Task<JsonDocument> FetchJsonAsync(string url, CancellationToken cancellationToken)
+    /// <summary>按路径拉取元数据：命中未过期缓存直接返回，否则最多重试 3 次并线性退避。</summary>
+    private async Task<JsonNode?> FetchAsync(string path, CancellationToken cancellationToken)
     {
-        using var response = await httpClient.GetAsync(url, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        var key = path.ToLowerInvariant();
+        if (_cache.TryGetValue(key, out var cached) && cached.ExpiresAt > timeProvider.GetUtcNow())
         {
-            throw new CloudApiException("InvalidAPIName", $"Metadata not found: {url}");
+            return cached.Value;
         }
 
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        Exception? last = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var response = await httpClient.GetAsync($"{BaseUrl}/{path}", cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new CloudApiException("DynamicMetaUnavailable",
+                        $"Metadata request failed with status {(int)response.StatusCode}: {path}");
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var node = JsonNode.Parse(body);
+                _cache[key] = new CacheEntry(timeProvider.GetUtcNow() + _ttl, node);
+                logger.LogDebug("Loaded metadata {Path}", path);
+                return node;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                last = exception;
+                if (attempt < 2)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(300 * (attempt + 1)), timeProvider, cancellationToken);
+                }
+            }
+        }
+
+        throw new CloudApiException("DynamicMetaUnavailable",
+            $"Failed to load metadata from {path}: {last?.Message ?? "unknown error"}");
     }
+
+    private static CloudApiException InvalidService(string service) =>
+        new("InvalidServiceName",
+            $"InvalidServiceName: Please check the Service ({service.ToLowerInvariant()}) you provide.");
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 }

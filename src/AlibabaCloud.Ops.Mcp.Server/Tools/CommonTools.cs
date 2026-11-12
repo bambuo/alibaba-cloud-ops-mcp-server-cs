@@ -38,10 +38,11 @@ public sealed partial class CommonTools(ServerOptions options, ApiMetaClient met
         var content = LoadPrompt();
         if (options.ServiceCodes.Count > 0)
         {
-            var replacement = "Supported Services:\n   - " + string.Join(
-                "\n   - ",
-                options.ServiceCodes.Select(code => $"{code}: {(SupportedServices.TryGetValue(code, out var name) ? name : code)}"));
-            content = SupportedServicesRegex().Replace(content, replacement);
+            var replacement = "Supported Services:\n" + string.Join(
+                "\n",
+                options.ServiceCodes.Select(code => code.ToLowerInvariant())
+                    .Select(code => $"   - {code}: {(SupportedServices.TryGetValue(code, out var name) ? name : code)}"));
+            content = SupportedServicesRegex().Replace(content, _ => replacement, 1);
         }
 
         return Task.FromResult(ToolResults.Text(content));
@@ -115,7 +116,7 @@ public sealed partial class CommonTools(ServerOptions options, ApiMetaClient met
             .FirstOrDefault(resource => resource.EndsWith("PROMPT_UNDERSTANDING.md", StringComparison.OrdinalIgnoreCase));
         if (name is null)
         {
-            return "Supported Services:\n   - ecs: Elastic Compute Service (ECS)";
+            return string.Empty;
         }
 
         using var stream = assembly.GetManifestResourceStream(name);
@@ -139,7 +140,7 @@ public sealed class InstanceTools(GenericApiCaller caller)
 {
     /// <summary>查询 ECS 实例列表。</summary>
     [McpServerTool(Name = "ECS_DescribeInstances")]
-    [Description("查询指定ECS实例的详细信息。此工具要求必须提供实例ID列表，避免随意查询所有实例。注意：此工具仅用于查询用户明确指定的实例信息，不允许用于扫描或枚举所有实例。")]
+    [Description("查询指定ECS实例的详细信息。此工具要求必须提供实例ID列表，避免随意查询所有实例。\n注意：此工具仅用于查询用户明确指定的实例信息，不允许用于扫描或枚举所有实例。")]
     public async Task<CallToolResult> DescribeInstances(
         [Description("AlibabaCloud ECS instance ID List (required)")] List<string> instance_ids,
         [Description("AlibabaCloud region ID")] string region_id = "cn-hangzhou",
@@ -147,7 +148,7 @@ public sealed class InstanceTools(GenericApiCaller caller)
     {
         if (instance_ids is null || instance_ids.Count == 0)
         {
-            return ToolResults.Error("InvalidParameter: instance_ids is required and cannot be empty");
+            return ToolResults.Error("InvalidParameter", "instance_ids is required and cannot be empty");
         }
 
         try
@@ -157,7 +158,8 @@ public sealed class InstanceTools(GenericApiCaller caller)
                 ["RegionId"] = JsonSerializer.SerializeToElement(region_id),
                 ["InstanceIds"] = JsonSerializer.SerializeToElement(JsonSerializer.Serialize(instance_ids)),
             };
-            return ToolResults.Text(await caller.CallAsync("ecs", "DescribeInstances", arguments, cancellationToken));
+            var response = await caller.CallAsync("ecs", "DescribeInstances", arguments, cancellationToken);
+            return ToolResults.Text(ToolResults.Find(response, "body"));
         }
         catch (Exception exception)
         {

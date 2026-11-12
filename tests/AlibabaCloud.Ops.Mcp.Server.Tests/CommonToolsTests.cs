@@ -29,7 +29,8 @@ public sealed class CommonToolsTests
 
             return Json("""{"summary":"查询实例","path":"/","methods":["post"],"parameters":[{"name":"RegionId","in":"query","schema":{"type":"string"}}]}""");
         });
-        var meta = new ApiMetaClient(new HttpClient(handler), NullLogger<ApiMetaClient>.Instance);
+        var meta = new ApiMetaClient(new HttpClient(handler), new ServerOptions(), TimeProvider.System,
+            NullLogger<ApiMetaClient>.Instance);
         var tools = new CommonTools(ServerOptions.Parse([]), meta, caller: null!);
 
         var result = await tools.GetApiInfo("ecs", "DescribeInstances");
@@ -44,11 +45,13 @@ public sealed class CommonToolsTests
     public void Only_entity_not_exists_is_treated_as_missing()
     {
         Assert.True(CodeDeployTools.IsMissingEntity(
-            new CloudApiException("Http404", "EntityNotExists.ApplicationGroup")));
+            new CloudApiException("Http404", "EntityNotExists.ApplicationGroup"), "EntityNotExists.ApplicationGroup"));
         Assert.False(CodeDeployTools.IsMissingEntity(
-            new CloudApiException("Http403", "Forbidden.RAM")));
+            new CloudApiException("Http403", "Forbidden.RAM"), "EntityNotExists.ApplicationGroup"));
         Assert.False(CodeDeployTools.IsMissingEntity(
-            new CloudApiException("Http500", "InternalError")));
+            new CloudApiException("Http500", "InternalError"), "EntityNotExists.ApplicationGroup"));
+        Assert.False(CodeDeployTools.IsMissingEntity(
+            new CloudApiException("EntityNotExists.Application", "EntityNotExists.Application"), "EntityNotExists.ApplicationGroup"));
     }
 
     [Fact]

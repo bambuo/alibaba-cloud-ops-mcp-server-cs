@@ -275,7 +275,7 @@ public sealed class DeployRulesTests
     }
 
     [Fact]
-    public void Corrupt_archive_is_reported_unknown()
+    public void Corrupt_archive_still_reported_as_archive()
     {
         var path = Path.Combine(Path.GetTempPath(), $"deploy-{Guid.NewGuid():N}.zip");
         try
@@ -284,7 +284,8 @@ public sealed class DeployRulesTests
 
             var analysis = DeployRules.AnalyzeFile(path);
 
-            Assert.Equal("unknown", analysis.FileType);
+            Assert.Equal("archive", analysis.FileType);
+            Assert.Empty(analysis.FilesInArchive);
         }
         finally
         {

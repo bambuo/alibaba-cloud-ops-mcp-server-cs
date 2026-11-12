@@ -52,7 +52,7 @@ public static class ServerInstructions
                    "tar -xzf app.tar.gz && java -jar app.jar"
                 3. 确保启动命令能够正确找到并执行解压后的可执行文件或脚本，避免部署失败。启动命令应该将程序运行在后台并打印日志到指定文件，
                     注意使用非交互式命令，比如unzip -o等自动覆盖的命令，无需交互
-                例如：
+                   例如：
                    - npm 程序示例：
                      "tar -xzf app.tar.gz && nohup npm start > /root/app.log 2>&1 &"
                      或者分别输出标准输出和错误日志：
@@ -63,5 +63,6 @@ public static class ServerInstructions
                      "tar -xzf app.tar.gz && nohup python app.py > /root/app.log 2>&1 &"
                    说明：使用 nohup 命令可以让程序在后台运行，即使终端关闭也不会终止；> 重定向标准输出到日志文件；2>&1 将标准错误也重定向到同一文件；& 符号让命令在后台执行。
                 4. 应用和应用分组会自动检查是否存在，如果存在则跳过创建，避免重复创建错误。
-""";
+
+            """;
 }

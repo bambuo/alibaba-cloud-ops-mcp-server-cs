@@ -15,17 +15,23 @@
 
 | 参数 | 类型 | 默认值 | 取值 | 行为 |
 |---|---|---|---|---|
-| `--transport` | string | `stdio` | `stdio` / `streamable-http` / `sse` | `sse` 首版返回明确错误并退出码 2 |
+| `--transport` | string | `stdio` | `stdio` / `streamable-http` / `both` / `sse` | `both` 同进程并行提供两种传输；`sse` 返回明确错误并退出码 2 |
 | `--port` | int | `8000` | 1–65535 | 仅 HTTP 传输生效 |
 | `--host` | string | `127.0.0.1` | 合法地址 | 仅 HTTP 传输生效 |
-| `--services` | string | 空 | 逗号分隔服务码 | 非空时额外注册 4 个通用工具 |
-| `--headers-credential-only` | bool | `false` | 标志 | 启用后凭证只能来自请求头，不回退 |
+| `--services` | string | 空 | 逗号分隔服务码 | 非空时额外注册 4 个通用工具；保留原始大小写与重复项 |
+| `--headers-credential-only` | bool | `false` | 标志，支持 `=false` 与分离值 `false` | 启用后凭证只能来自请求头，不回退；OSS 例外见下 |
 | `--env` | string | `domestic` | `domestic` / `international` | 切换端点域名 |
-| `--code-deploy` | bool | `false` | 标志 | 仅注册 7 个部署相关工具 |
-| `--extra-config` | string | 空 | JSON 对象 | 追加服务与 API，累加不替换 |
+| `--code-deploy` | bool | `false` | 标志，支持 `=false` 与分离值 `false` | 仅注册 7 个部署相关工具 |
+| `--extra-config` | string | 空 | JSON 对象或 Python 单引号字面量 | 追加服务与 API，累加不替换；解析失败告警后忽略 |
 | `--visible-tools` | string | 空 | 逗号分隔工具名 | 白名单，大小写不敏感；与 `--code-deploy` 互斥，后者优先 |
+| `--oos-timeout-seconds` | int | `900` | ≥1 | OOS 执行轮询总超时 |
+| `--meta-cache-ttl-seconds` | int | `600` | ≥1 | POP 元数据缓存 TTL |
+| `--enable-local-tools` | bool | `true` | 标志，支持 `=false` 与分离值 `false` | 为 `false` 时不注册 `LOCAL_*` |
+| `--help` / `-h` | flag | — | — | 打印用法并以退出码 0 结束 |
 
-`--extra-config` 示例：`{"sls":["GetProject","ListProject"],"ecs":["StartInstance"]}`。单引号 Python 字面量不支持，解析失败时退出码 2 并打印 JSON 示例。
+`--extra-config` 示例：`{"sls":["GetProject","ListProject"],"ecs":["StartInstance"]}`，也接受 `{'sls': ['GetProject']}`。解析失败时向 stderr 打印 `WARN: Failed to parse --extra-config, ignoring it: ...` 并继续启动，不阻断进程。
+
+凭证例外：`--headers-credential-only` 只约束通用调用；OSS 与部署上传按上游语义始终回落环境变量与默认凭证链（`ICredentialProvider.ResolveForOss`）。请求头只要 `x-acs-accesskey-id` 非空即采用，secret 可缺失。
 
 ### 2.2 环境变量
 
@@ -152,7 +158,7 @@ public sealed class GenericApiCaller
 
 1. HTTP 请求头存在 `x-acs-accesskey-id` 时使用请求头三元组。
 2. 否则使用 `Aliyun.Credentials` 默认链（环境变量 → 配置文件 → RAM 角色 → 实例元数据）。
-3. `--headers-credential-only` 为真且无请求头时，返回 `MissingCredentials`，不回退。
+3. `--headers-credential-only` 为真且无请求头时，返回 `CredentialMissing`，不回退；OSS 例外见 2.1。
 
 端点规则：
 
@@ -225,7 +231,7 @@ public Task<DeployResult> DeployAsync(
 4. 检查应用与分组是否存在，缺失时创建。
 5. 需要导入已有实例时调用 `TagResources` 打标。
 6. 调用 `DeployApplicationGroup`，返回 execution id。
-7. 用 `TimeProvider` 轮询 `ListExecutions`，间隔 1 秒，支持取消与总超时（默认 600 秒）。
+7. 用 `TimeProvider` 轮询 `ListExecutions`，间隔 1 秒，支持取消与总超时（默认 900 秒，`--oos-timeout-seconds` 可配）。
 8. 写入 `.code_deploy/application.json`，返回控制台链接与部署结果。
 
 启停命令：
@@ -240,13 +246,17 @@ public Task<DeployResult> DeployAsync(
 
 | 场景 | 返回 | 日志 |
 |---|---|---|
-| 参数缺失或非法 | MCP `isError: true`，消息含参数名 | Warning，不含凭据 |
-| 凭证缺失 | `MissingCredentials` | Warning |
-| 阿里云 4xx | 保留 `Code` 与 `Message` | Error，含 RequestId |
-| 阿里云 5xx / 限流 | SDK 重试后返回错误 | Error，含重试次数 |
-| 元数据不可达 | 跳过动态工具 | Warning，含 URL |
-| 本地命令超时 | 超时错误 + 已终止标记 | Warning |
-| 部署执行失败 | `Failed` + 状态消息 + 控制台链接 | Error |
+| 统一错误载荷 | `isError: true`，文本为 JSON `{"Code","Message","RequestId"?}`，与 Java 侧一致 | 不含凭据 |
+| 参数缺失或非法 | `Code=InvalidParameter`，消息含参数名 | Warning |
+| 凭证缺失 | `Code=CredentialMissing` | Warning |
+| 阿里云 4xx/5xx | 保留 SDK 的 `Code` 与 `Message`，可取到时带 `RequestId` | Error |
+| 元数据不可达 | 泛化调用降级为 `POST / + RPC` 继续；动态工具注册失败则跳过该项 | Warning，含路径 |
+| 元数据重试 | 最多 3 次，退避 300/600ms，耗尽后 `Code=DynamicMetaUnavailable` | Warning |
+| 本地命令超时 | `Code=Timeout`，消息 `Command execution timeout (exceeded N seconds)` | Warning |
+| OOS 执行失败 | `Code=Execution.Failed`，消息 `OOS Execution Failed, reason: {StatusMessage}.` | Error |
+| OOS 轮询超时 | `Code=Timeout`，消息含执行 ID 与超时秒数 | Error |
+| 产物不存在 | `Code=ResourceNotFound`，消息 `File does not exist: {path}` | Error |
+| 部署信息写盘失败 | 只记日志，部署仍按成功返回 | Error |
 
 - 所有日志写 stderr。
 - 部署轮询通过 MCP progress 通知上报阶段与次数（客户端支持时）。
@@ -312,35 +322,46 @@ public Task<DeployResult> DeployAsync(
 
 | 编号 | 项 | 上游 | C# | 处理 |
 |---|---|---|---|---|
-| E1 | OSS 返回值 | Python 对象字符串 | 结构化 JSON | 接受，验收按字段比对 |
-| E2 | CMS 返回值 | SDK 对象 | JSON 数组 | 接受 |
+| E1 | OSS 返回值 | Python 对象字符串 | 结构化 JSON，字段名与顺序对齐 | 接受，语言自有表达 |
+| E2 | CMS 返回值 | SDK `datapoints` 原值 | 同取 `Datapoints` 原值 | 已对齐，不再是差异 |
 | E3 | SSE | 支持 | 不支持，参数报错 | 接受，文档声明 |
-| E4 | `--extra-config` | JSON 或 Python 字面量 | 仅 JSON | 接受 |
-| E5 | 轮询 | 无总超时 | 600 秒默认超时 | 接受，可配置 |
-| E6 | 元数据失败 | 启动失败 | 降级为静态工具 | 待确认 Q6 |
+| E4 | `--extra-config` | JSON 或 Python 字面量 | 两者均支持，失败告警后忽略 | 已对齐 |
+| E5 | 轮询 | 无总超时 | 默认 900 秒，`--oos-timeout-seconds` 可配 | 接受，与 Java 一致 |
+| E6 | 元数据失败 | 启动失败 | 泛化调用降级 `POST / + RPC`；动态工具跳过该项 | 已对齐 Java |
 | E7 | `ForeceStop` | 拼写错误 | 保持原样 | 待确认 Q2 |
 | E8 | `OSS_PutObject` | 未注册 | 不注册 | 待确认 Q3 |
-| E9 | 工具注解 | 无 | 增加只读/破坏性标注 | 待确认，可能触发客户端确认 |
+| E9 | 工具注解 | 无 | 仅动态工具标注只读/破坏性/幂等 | 与 Java 一致，静态工具两侧均无注解 |
+| E10 | 错误封装 | 纯文本 `Error calling tool ...` | JSON `{Code,Message,RequestId?}` | 用户裁定统一为结构化 JSON，两侧一致 |
+| E11 | OSS 建桶/删桶响应元数据 | 含 `request_id`/`headers` | .NET SDK 不暴露，`request_id` 为空串、`headers` 为空对象 | SDK 限制，字段集保持一致 |
+| E12 | OSS 桶扩展字段 | ListBuckets 直接返回 | .NET SDK 只解析 name/location/creation_date，其余按桶 `GetBucketInfo` 补齐，无权限时为 null | SDK 限制，尽力补齐 |
+| E13 | OSS User-Agent | 追加服务名后缀 | .NET SDK `ClientConfiguration.UserAgent` 只读，保留 SDK 默认 | SDK 限制 |
+| E14 | 必填参数校验位置 | 框架层 | Java 由 MCP SDK 前置校验（纯文本），C# 在处理器内校验（结构化 JSON） | 框架自有行为，拒绝语义一致 |
+| E15 | 静态工具 schema 形态 | pydantic `title`/`anyOf`/`items:{}` | 由 MCP C# SDK 按方法签名生成：无 `title`，可空用 `type:["string","null"]`，数组 `items` 带元素类型 | 语言自有表达；参数名、必填集合、默认值与描述一致。动态工具 schema 为手写，已逐项对齐 |
 
 ## 十三、实现结果（2026-11-12）
 
 | 项 | 结果 |
 |---|---|
-| 构建 | `dotnet build` 通过，Release 构建干净 |
-| 测试 | 104 项通过，0 失败 |
-| 工具面 | 默认 40、`--services` 44、`--code-deploy` 7、白名单 3（stdio 实测） |
-| 传输 | stdio 与无状态 HTTP 工具面一致：默认 40、白名单 3、`--code-deploy` 7（HTTP 实测） |
+| 构建 | `dotnet build` 通过，0 警告 0 错误 |
+| 测试 | 132 项通过，0 失败（含 21 项与 Java 对齐的语义回归） |
+| 工具面 | 默认 40、`--services` 44、`--code-deploy` 7、`--enable-local-tools false` 37（stdio 实测，与 Java 逐项一致） |
+| 传输 | stdio / streamable-http / both 均可用；both 下 stdio 与 HTTP 同时握手成功（实测） |
+| instructions | 2099 字符，与 Java 侧逐行相等（实测） |
+| 真实只读联调 | `ECS_DescribeRegions`、`OSS_ListBuckets`、`CommonAPICaller` 嵌套 Tag 展开成功；headers-only 下 OSS 可用 |
 | 版本 | 包版本与 `serverInfo.version` 均为 0.9.27，与上游发布号一致 |
-| 打包 | `dotnet pack` 生成 7.1 MB nupkg；`dotnet tool install` 后可执行，`--transport sse` 退出码 2 |
+| 打包 | `dotnet pack` 生成 nupkg；`dotnet tool install` 后可执行，`--transport sse` 退出码 2 |
 | 覆盖率 | ApiMetaClient 100%、EndpointResolver 100%、CredentialProvider 95.8%、ServerOptions 87.9%、ExtraConfigParser 84.6%、DeployRules 行 100.0% / 分支 94.5%、GenericApiCaller 行 98.5% / 分支 92.6% |
 
 与设计稿的实现差异：
 
 1. OOS 与 CMS 固定工具统一走泛化调用，未使用产品 SDK；请求参数与上游一致，减少 4 个重依赖。
-2. OSS 使用 V1 SDK `Aliyun.OSS.SDK.NetCore` 2.14.1；V2 0.3.0 仍为预览版，未采用。
-3. OSS Bucket 使用确定性命名 `app-{应用名}-code-deploy`，未复刻上游按标签搜索复用。
-4. `--visible-tools` 通过启动后从工具集合移除未命中项实现；`--code-deploy` 优先但不输出告警。
-5. 部署轮询总超时固定 600 秒，未暴露为参数。
+2. OSS 使用 V1 SDK `Aliyun.OSS.SDK.NetCore` 2.14.1；V2 0.3.0 仍为预览版，未采用。对象列举用 V1 Marker 翻页（与 Java 的 V2 continuationToken 同为取全量，属 SDK 自有表达）。
+3. OSS 部署 Bucket 已改为按 `app_management=code_deploy` 标签复用，未命中时以 `code-deploy-{8位uuid}` 命名并打标，与上游/Java 一致。
+4. `--visible-tools` 通过启动后从工具集合移除未命中项实现；`--code-deploy` 优先，Java 侧输出 warn。
+5. 部署轮询总超时默认 900 秒，由 `--oos-timeout-seconds` 配置；部署链本身与上游一致地不轮询。
+6. 错误载荷统一为结构化 JSON `{Code,Message,RequestId?}`，错误码表与 Java 对齐。
+7. HTTP 传输改为有会话（`Stateless=false`），与 Java 的会话隔离语义一致。
+8. `.NET` SDK 未暴露的 OSS 响应元数据与 User-Agent 见例外清单 E11–E13。
 
 ## 十四、待办
 

@@ -38,7 +38,8 @@ public sealed class LocalToolsTests
         var result = await _tools.ListDirectory("/definitely/not/exists");
 
         Assert.True(result.IsError);
-        Assert.Contains("NotFound", Text(result));
+        Assert.Contains("InvalidParameter", Text(result));
+        Assert.Contains("Failed to list directory", Text(result));
     }
 
     [Fact]
@@ -92,7 +93,8 @@ public sealed class LocalToolsTests
         var result = await _tools.RunShellScript("sleep 5", timeout: 1);
 
         Assert.True(result.IsError);
-        Assert.Contains("CommandTimeout", Text(result));
+        Assert.Contains("\"Code\":\"Timeout\"", Text(result));
+        Assert.Contains("Command execution timeout (exceeded 1 seconds)", Text(result));
     }
 
     [Fact]

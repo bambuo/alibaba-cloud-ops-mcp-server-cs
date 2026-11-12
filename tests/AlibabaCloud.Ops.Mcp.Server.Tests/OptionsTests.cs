@@ -53,10 +53,21 @@ public sealed class OptionsTests
     }
 
     [Fact]
-    public void Rejects_python_literal_extra_config()
+    public void Accepts_python_literal_extra_config()
     {
-        Assert.Throws<OptionException>(() =>
-            ServerOptions.Parse(["--extra-config", "{'sls': ['GetProject']}"]));
+        var options = ServerOptions.Parse(["--extra-config", "{'sls': ['GetProject']}"]);
+
+        Assert.NotNull(options.ExtraConfig);
+        var parsed = ExtraConfigParser.Parse(options.ExtraConfig!);
+        Assert.Contains("GetProject", parsed["sls"]);
+    }
+
+    [Fact]
+    public void Ignores_invalid_extra_config_with_warning()
+    {
+        var options = ServerOptions.Parse(["--extra-config", "{not json"]);
+
+        Assert.Null(options.ExtraConfig);
     }
 
     [Fact]

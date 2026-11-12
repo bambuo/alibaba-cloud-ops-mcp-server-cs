@@ -10,7 +10,7 @@ public static class ExtraConfigParser
     {
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(Normalize(json));
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 throw new OptionException("InvalidArgument: --extra-config expects a JSON object");
@@ -42,6 +42,28 @@ public static class ExtraConfigParser
         }
     }
 
-    /// <summary>启动阶段预校验，避免运行期才发现配置非法。</summary>
-    public static void Validate(string json) => Parse(json);
+    /// <summary>启动阶段解析：非法配置告警后忽略，与上游一致地不阻断启动。</summary>
+    public static string? Validate(string json)
+    {
+        try
+        {
+            Parse(json);
+            return json;
+        }
+        catch (OptionException exception)
+        {
+            // 参数解析发生在日志系统初始化之前，直接写 stderr 以免污染 stdio 协议
+            Console.Error.WriteLine($"WARN: Failed to parse --extra-config, ignoring it: {exception.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>兼容上游的 Python 单引号字面量写法。</summary>
+    private static string Normalize(string json)
+    {
+        var trimmed = json.Trim();
+        return trimmed.StartsWith('{') && trimmed.Contains('\'')
+            ? trimmed.Replace('\'', '"')
+            : trimmed;
+    }
 }

@@ -11,7 +11,7 @@ public sealed class RequestBuilderTests
     {
         var meta = new ApiMeta("summary", "/api/v1/clusters", ["post"], "ROA", []) { Version = "2015-12-15" };
 
-        var request = GenericApiCaller.BuildParams(meta, "ROA", "DescribeClustersV1");
+        var request = GenericApiCaller.BuildParams(meta, "2015-12-15", "ROA", "DescribeClustersV1");
 
         Assert.Equal("DescribeClustersV1", request.Action);
         Assert.Equal("2015-12-15", request.Version);
@@ -26,7 +26,7 @@ public sealed class RequestBuilderTests
     {
         var meta = new ApiMeta(null, null, null, null, []) { Version = "2020-01-01" };
 
-        var request = GenericApiCaller.BuildParams(meta, "RPC", "DescribeThings");
+        var request = GenericApiCaller.BuildParams(meta, "2020-01-01", "RPC", "DescribeThings");
 
         Assert.Equal("GET", request.Method);
         Assert.Equal("/", request.Pathname);
@@ -37,12 +37,25 @@ public sealed class RequestBuilderTests
     {
         var credentials = new CloudCredentials("id", "secret", "token", "test");
 
-        var config = GenericApiCaller.BuildConfig(credentials, "ecs.cn-hangzhou.aliyuncs.com");
+        var config = GenericApiCaller.BuildConfig(credentials, "ecs.cn-hangzhou.aliyuncs.com", "cn-hangzhou");
 
         Assert.Equal("id", config.AccessKeyId);
         Assert.Equal("secret", config.AccessKeySecret);
         Assert.Equal("token", config.SecurityToken);
         Assert.Equal("ecs.cn-hangzhou.aliyuncs.com", config.Endpoint);
         Assert.Equal("alibaba-cloud-ops-mcp-server", config.UserAgent);
+        Assert.Equal("cn-hangzhou", config.RegionId);
+        Assert.Equal(10_000, config.ConnectTimeout);
+        Assert.Equal(60_000, config.ReadTimeout);
+    }
+
+    [Fact]
+    public void Missing_metadata_falls_back_to_post_root()
+    {
+        var request = GenericApiCaller.BuildParams(null, "2014-05-26", "RPC", "DescribeThings");
+
+        Assert.Equal("POST", request.Method);
+        Assert.Equal("/", request.Pathname);
+        Assert.Equal("2014-05-26", request.Version);
     }
 }

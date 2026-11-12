@@ -20,6 +20,7 @@ public sealed class EndpointResolverTests
     [InlineData("unknown", "cn-hangzhou", "unknown.cn-hangzhou.aliyuncs.com")]
     [InlineData("bssopenapi", "cn-hangzhou", "business.aliyuncs.com")]
     [InlineData("bssopenapi", "cn-chengdu", "business.aliyuncs.com")]
+    [InlineData("SWAS-OPEN", "cn-hongkong", "swas.cn-hongkong.aliyuncs.com")]
     public void Resolves_endpoint_by_service_and_region(string service, string region, string expected)
     {
         Assert.Equal(expected, Resolver().Resolve(service, region));

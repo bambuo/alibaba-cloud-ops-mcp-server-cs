@@ -21,16 +21,27 @@ public sealed class DynamicApiToolFactory(
         "EipAddresses", "PublicIpAddresses", "PrivateIpAddresses",
     ];
 
+    private static readonly Dictionary<string, string> TypeMap = new(StringComparer.Ordinal)
+    {
+        ["string"] = "string",
+        ["integer"] = "integer",
+        ["boolean"] = "boolean",
+        ["array"] = "array",
+        ["object"] = "object",
+        ["number"] = "number",
+    };
+
     /// <summary>创建单个动态工具，元数据缺失时返回 null 而不中断启动。</summary>
     public async Task<McpServerTool?> CreateAsync(string service, string api, CancellationToken cancellationToken)
     {
         try
         {
             var standardService = await metaClient.GetStandardServiceCodeAsync(service, cancellationToken);
-            var apiNames = await metaClient.GetApiNamesAsync(standardService, cancellationToken);
-            var standardApi = apiNames.FirstOrDefault(x => string.Equals(x, api, StringComparison.OrdinalIgnoreCase)) ?? api;
+            var standardApi = await metaClient.GetStandardApiAsync(standardService, api, cancellationToken);
             var meta = await metaClient.GetApiMetaAsync(standardService, standardApi, cancellationToken);
             var toolName = $"{standardService.ToUpperInvariant()}_{standardApi}";
+            var schema = BuildInputSchema(standardService, meta);
+            var regionDefault = RegionDefault(schema);
 
             Func<RequestContext<CallToolRequestParams>, CancellationToken, ValueTask<CallToolResult>> handler = async (context, token) =>
             {
@@ -40,12 +51,18 @@ public sealed class DynamicApiToolFactory(
                         ? new Dictionary<string, JsonElement>(values, StringComparer.OrdinalIgnoreCase)
                         : new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
 
+                    if (regionDefault is not null && !arguments.ContainsKey("RegionId"))
+                    {
+                        arguments["RegionId"] = JsonSerializer.SerializeToElement(regionDefault);
+                    }
+
+                    RequireArguments(schema, arguments);
                     var result = await caller.CallAsync(standardService, standardApi, arguments, token);
-                    return Text(result?.ToJsonString() ?? "null");
+                    return ToolResults.Text(result);
                 }
                 catch (Exception exception)
                 {
-                    return Error(exception.Message);
+                    return ToolResults.Error(exception);
                 }
             };
 
@@ -58,7 +75,7 @@ public sealed class DynamicApiToolFactory(
                 Idempotent = IsReadOnly(standardApi),
             });
 
-            tool.ProtocolTool.InputSchema = JsonSerializer.SerializeToElement(BuildInputSchema(standardService, meta));
+            tool.ProtocolTool.InputSchema = JsonSerializer.SerializeToElement(schema);
             logger.LogInformation("Registered dynamic tool {Tool}", toolName);
             return tool;
         }
@@ -69,76 +86,140 @@ public sealed class DynamicApiToolFactory(
         }
     }
 
-    /// <summary>由元数据生成 JSON Schema，补充 RegionId 默认值与 ECS 列表参数。</summary>
+    /// <summary>由元数据生成 JSON Schema：必填项排前，补 RegionId 默认值与 ECS 列表参数。</summary>
     internal static JsonObject BuildInputSchema(string service, ApiMeta meta)
     {
         var properties = new JsonObject();
         var required = new JsonArray();
+        var parameters = meta.Parameters ?? [];
 
-        foreach (var parameter in meta.Parameters ?? [])
+        foreach (var requiredPass in new[] { true, false })
         {
-            var name = parameter.Name;
-            if (string.IsNullOrWhiteSpace(name) || name.Contains('.'))
+            foreach (var parameter in parameters)
             {
-                continue;
+                var name = parameter.Name;
+                if (string.IsNullOrWhiteSpace(name) || name.Contains('.'))
+                {
+                    continue;
+                }
+
+                var schema = parameter.Schema;
+                var isRequired = schema.TryGetProperty("required", out var requiredElement)
+                                 && requiredElement.ValueKind == JsonValueKind.True;
+                if (isRequired != requiredPass)
+                {
+                    continue;
+                }
+
+                var type = schema.TryGetProperty("type", out var typeElement)
+                    ? typeElement.GetString() ?? string.Empty
+                    : string.Empty;
+                var description = schema.TryGetProperty("description", out var descriptionElement)
+                    ? descriptionElement.GetString() ?? string.Empty
+                    : string.Empty;
+                var example = schema.TryGetProperty("example", out var exampleElement)
+                    ? exampleElement.ToString()
+                    : string.Empty;
+
+                var ecsListParameter = string.Equals(service, "ecs", StringComparison.OrdinalIgnoreCase)
+                                       && type == "string"
+                                       && EcsListParameters.Contains(name);
+                var schemaType = ecsListParameter ? "array" : TypeMap.GetValueOrDefault(type, "string");
+
+                var property = new JsonObject();
+                if (schemaType == "object")
+                {
+                    property["additionalProperties"] = true;
+                }
+
+                if (!isRequired)
+                {
+                    property["default"] = null;
+                }
+
+                property["description"] = $"{description} 参数类型: {type},参数示例：{example}";
+                if (schemaType == "array")
+                {
+                    property["items"] = new JsonObject();
+                }
+
+                property["title"] = SchemaTitle(name);
+                property["type"] = schemaType;
+                properties[name] = property;
+
+                if (isRequired)
+                {
+                    required.Add(name);
+                }
             }
-
-            var schema = parameter.Schema;
-            var type = schema.TryGetProperty("type", out var typeElement)
-                ? typeElement.GetString() ?? "string"
-                : "string";
-
-            if (string.Equals(service, "ecs", StringComparison.OrdinalIgnoreCase)
-                && EcsListParameters.Contains(name)
-                && type == "string")
-            {
-                type = "array";
-            }
-
-            var description = schema.TryGetProperty("description", out var descriptionElement)
-                ? descriptionElement.GetString() ?? string.Empty
-                : string.Empty;
-            var example = schema.TryGetProperty("example", out var exampleElement)
-                ? exampleElement.ToString()
-                : string.Empty;
-
-            var isRequired = schema.TryGetProperty("required", out var requiredElement)
-                             && requiredElement.ValueKind == JsonValueKind.True;
-
-            var property = new JsonObject
-            {
-                ["type"] = type,
-                ["description"] = $"{description} 参数类型: {type},参数示例：{example}",
-            };
-
-            if (isRequired)
-            {
-                required.Add(name);
-            }
-            else
-            {
-                property["default"] = null;
-            }
-
-            properties[name] = property;
         }
 
         if (!properties.ContainsKey("RegionId"))
         {
             properties["RegionId"] = new JsonObject
             {
-                ["type"] = "string",
-                ["description"] = "地域ID",
                 ["default"] = "cn-hangzhou",
+                ["description"] = "地域ID",
+                ["title"] = SchemaTitle("RegionId"),
+                ["type"] = "string",
             };
         }
 
-        return new JsonObject
+        var result = new JsonObject { ["properties"] = properties };
+        if (required.Count > 0)
         {
-            ["type"] = "object",
-            ["properties"] = properties,
-            ["required"] = required,
-        };
+            result["required"] = required;
+        }
+
+        result["type"] = "object";
+        return result;
+    }
+
+    /// <summary>校验必填参数，缺失时抛 InvalidParameter。</summary>
+    internal static void RequireArguments(JsonObject schema, IReadOnlyDictionary<string, JsonElement> arguments)
+    {
+        if (schema["required"] is not JsonArray required)
+        {
+            return;
+        }
+
+        foreach (var name in required.OfType<JsonValue>().Select(x => x.GetValue<string>()))
+        {
+            if (!arguments.TryGetValue(name, out var value) || value.ValueKind == JsonValueKind.Null)
+            {
+                throw new OpsException("InvalidParameter", $"{name} is required and cannot be empty.");
+            }
+        }
+    }
+
+    /// <summary>按 pydantic 规则生成 title：下划线转空格，词首大写其余小写。</summary>
+    internal static string SchemaTitle(string name)
+    {
+        var spaced = name.Replace('_', ' ');
+        var builder = new System.Text.StringBuilder(spaced.Length);
+        var previousLetter = false;
+        foreach (var character in spaced)
+        {
+            if (char.IsLetter(character))
+            {
+                builder.Append(previousLetter ? char.ToLowerInvariant(character) : char.ToUpperInvariant(character));
+                previousLetter = true;
+            }
+            else
+            {
+                builder.Append(character);
+                previousLetter = false;
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>仅当 RegionId 是自动补充的 cn-hangzhou 默认值时才注入请求。</summary>
+    private static string? RegionDefault(JsonObject schema)
+    {
+        var value = schema["properties"]?["RegionId"]?["default"]?.GetValue<string>();
+        return value == "cn-hangzhou" ? value : null;
     }
 
     /// <summary>按 API 名推断只读属性。</summary>
@@ -155,18 +236,4 @@ public sealed class DynamicApiToolFactory(
         || api.StartsWith("Reset", StringComparison.OrdinalIgnoreCase)
         || api.StartsWith("Replace", StringComparison.OrdinalIgnoreCase)
         || api.StartsWith("Run", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>构造成功结果。</summary>
-    private static CallToolResult Text(string value) => new()
-    {
-        Content = [new TextContentBlock { Text = value }],
-        IsError = false,
-    };
-
-    /// <summary>构造错误结果。</summary>
-    private static CallToolResult Error(string message) => new()
-    {
-        Content = [new TextContentBlock { Text = message }],
-        IsError = true,
-    };
 }

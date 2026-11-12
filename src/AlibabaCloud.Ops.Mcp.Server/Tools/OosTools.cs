@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AlibabaCloud.Ops.Mcp.Server.Cloud;
+using AlibabaCloud.Ops.Mcp.Server.Options;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -9,9 +10,8 @@ namespace AlibabaCloud.Ops.Mcp.Server.Tools;
 
 /// <summary>通过 OOS 模板执行 ECS/RDS 常用运维操作。</summary>
 [McpServerToolType]
-public sealed class OosTools(OosExecutor executor)
+public sealed class OosTools(OosExecutor executor, ServerOptions options)
 {
-    private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromSeconds(600);
 
     /// <summary>通过云助手在 ECS 实例执行命令。</summary>
 
@@ -82,17 +82,17 @@ public sealed class OosTools(OosExecutor executor)
         [Description("SecurityGroup ID")] string SecurityGroupId,
         [Description("VSwitch ID")] string VSwitchId,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
-        [Description("The maximum outbound bandwidth of the instance. Unit: Mbit/s. Valid values: 0 to 100.")] int InternetMaxBandwidthOut = 0,
+        [Description("The maximum outbound bandwidth of the instance. Unit: Mbit/s. Valid values: 0 to 100. If you want to open the public network for the ECS instance, you need to set a value > 0")] int InternetMaxBandwidthOut = 0,
         [Description("Number of ECS instances")] int Amount = 1,
         [Description("Instance Name")] string InstanceName = "",
-        [Description("The category of the system disk.")] string SystemDiskCategory = "cloud_essd",
-        [Description("The size of the system disk. Unit: GiB.")] string SystemDiskSize = "",
+        [Description("The category of the system disk. Valid values: cloud_efficiency, cloud_ssd, cloud_essd, cloud_auto, cloud, cloud_essd_entry")] string SystemDiskCategory = "cloud_essd",
+        [Description("The size of the system disk. Unit: GiB. Valid values: 20 to 500. Default value: 40 or the image size, whichever is greater")] string SystemDiskSize = "",
         [Description("The name of the system disk")] string SystemDiskName = "",
         [Description("The description of the system disk")] string SystemDiskDescription = "",
-        [Description("The performance level of the ESSD used as the system disk.")] string SystemDiskPerformanceLevel = "PL1",
-        [Description("The private IP address of the instance.")] string PrivateIpAddress = "",
+        [Description("The performance level of the ESSD used as the system disk. Valid values: PL0, PL1, PL2, PL3")] string SystemDiskPerformanceLevel = "PL1",
+        [Description("The private IP address of the instance. For VPC type ECS instances, the private IP address must be selected from the available IP range of the VSwitch")] string PrivateIpAddress = "",
         [Description("The ID of the automatic snapshot policy to apply to the system disk")] string SystemDiskAutoSnapshotPolicyId = "",
-        [Description("Data disk configuration in JSON format.")] string DataDiskParameters = "",
+        [Description("Data disk configuration in JSON format. Example: [{\"Size\":\"100\",\"DiskName\":\"data-disk-1\",\"Description\":\"\",\"Category\":\"cloud_essd\",\"PerformanceLevel\":\"PL1\",\"AutoSnapshotPolicyId\":\"\"}]")] string DataDiskParameters = "",
         [Description("The tag of an ECS instance, for example: [{\"Key\":\"oos\",\"Value\":\"test\"}]")] List<TagItem>? Tags = null,
         [Description("Resource group ID")] string ResourceGroupId = "",
         [Description("The description of the ECS instances")] string Description = "",
@@ -112,11 +112,11 @@ public sealed class OosTools(OosExecutor executor)
             ["instanceName"] = InstanceName,
         };
 
-        AddIfSet(parameters, "systemDiskCategory", SystemDiskCategory);
+        AddIfSet(parameters, "systemDiskCategory", SystemDiskCategory, "cloud_essd");
         AddIfSet(parameters, "systemDiskSize", SystemDiskSize);
         AddIfSet(parameters, "systemDiskName", SystemDiskName);
         AddIfSet(parameters, "systemDiskDescription", SystemDiskDescription);
-        AddIfSet(parameters, "systemDiskPerformanceLevel", SystemDiskPerformanceLevel);
+        AddIfSet(parameters, "systemDiskPerformanceLevel", SystemDiskPerformanceLevel, "PL1");
         AddIfSet(parameters, "privateIpAddress", PrivateIpAddress);
         AddIfSet(parameters, "systemDiskAutoSnapshotPolicyId", SystemDiskAutoSnapshotPolicyId);
         AddIfSet(parameters, "resourceGroupId", ResourceGroupId);
@@ -153,7 +153,7 @@ public sealed class OosTools(OosExecutor executor)
     [Description("批量修改ECS实例的密码，请注意，本操作将会重启ECS实例")]
     public Task<CallToolResult> ResetPassword(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
-        [Description("The password of the ECS instance must be 8-30 characters.")] string Password,
+        [Description("The password of the ECS instance must be 8-30 characters and must contain only the following characters: lowercase letters, uppercase letters, numbers, and special characters only.（）~！@#$%^&*-_+=（40：<>，？/")] string Password,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(RegionId, "ACS-ECS-BulkyResetPassword",
@@ -174,7 +174,7 @@ public sealed class OosTools(OosExecutor executor)
     /// <summary>批量启动 RDS 实例。</summary>
 
     [McpServerTool(Name = "OOS_StartRDSInstances")]
-    [Description("批量启动RDS实例，适用于需要同时管理和启动多台RDS实例的场景。")]
+    [Description("批量启动RDS实例，适用于需要同时管理和启动多台RDS实例的场景，例如应用部署和高可用性场景。")]
     public Task<CallToolResult> StartRdsInstances(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
@@ -210,7 +210,8 @@ public sealed class OosTools(OosExecutor executor)
     {
         try
         {
-            var result = await executor.StartExecutionAsync(regionId, templateName, parameters, ExecutionTimeout, cancellationToken);
+            var result = await executor.StartExecutionAsync(
+                regionId, templateName, parameters, TimeSpan.FromSeconds(options.OosTimeoutSeconds), cancellationToken);
             return ToolResults.Text(result);
         }
         catch (Exception exception)
@@ -250,12 +251,13 @@ public sealed class OosTools(OosExecutor executor)
     private static JsonArray ToArray(IEnumerable<string> values) =>
         new(values.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
 
-    /// <summary>值非空时写入可选参数。</summary>
-    private static void AddIfSet(JsonObject target, string name, string value)
+    /// <summary>值非空白时写入可选参数，空白时回落到上游签名默认值。</summary>
+    private static void AddIfSet(JsonObject target, string name, string value, string? fallback = null)
     {
-        if (!string.IsNullOrEmpty(value))
+        var effective = string.IsNullOrWhiteSpace(value) ? fallback : value;
+        if (!string.IsNullOrWhiteSpace(effective))
         {
-            target[name] = value;
+            target[name] = effective;
         }
     }
 }

@@ -49,7 +49,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     /// <summary>读取 ECS 实例已用内存。</summary>
 
     [McpServerTool(Name = "CMS_GetMemUsedData")]
-    [Description("获取ECS实例已使用内存数据")]
+    [Description("获取内存使用量指标数据")]
     public Task<CallToolResult> GetMemUsedData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
@@ -58,7 +58,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     /// <summary>读取 ECS 实例内存使用率。</summary>
 
     [McpServerTool(Name = "CMS_GetMemUsageData")]
-    [Description("获取ECS实例内存使用率数据")]
+    [Description("获取内存利用率指标数据")]
     public Task<CallToolResult> GetMemUsageData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
@@ -67,7 +67,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     /// <summary>读取 ECS 实例磁盘使用率。</summary>
 
     [McpServerTool(Name = "CMS_GetDiskUsageData")]
-    [Description("获取ECS实例磁盘使用率数据")]
+    [Description("获取磁盘利用率指标数据")]
     public Task<CallToolResult> GetDiskUsageData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
@@ -76,7 +76,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     /// <summary>读取 ECS 实例磁盘总量。</summary>
 
     [McpServerTool(Name = "CMS_GetDiskTotalData")]
-    [Description("获取ECS实例磁盘总量数据")]
+    [Description("获取磁盘分区总容量指标数据")]
     public Task<CallToolResult> GetDiskTotalData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
@@ -85,7 +85,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
     /// <summary>读取 ECS 实例已用磁盘空间。</summary>
 
     [McpServerTool(Name = "CMS_GetDiskUsedData")]
-    [Description("获取ECS实例磁盘已使用数据")]
+    [Description("获取磁盘分区使用量指标数据")]
     public Task<CallToolResult> GetDiskUsedData(
         [Description("AlibabaCloud ECS instance ID List")] List<string> InstanceIds,
         [Description("AlibabaCloud region ID")] string RegionId = "cn-hangzhou",
@@ -103,7 +103,6 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
             var dimensions = instanceIds.Select(id => new { instanceId = id }).ToArray();
             var arguments = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
             {
-                ["RegionId"] = JsonSerializer.SerializeToElement(regionId),
                 ["Namespace"] = JsonSerializer.SerializeToElement("acs_ecs_dashboard"),
                 ["MetricName"] = JsonSerializer.SerializeToElement(metricName),
                 ["Dimensions"] = JsonSerializer.SerializeToElement(JsonSerializer.Serialize(dimensions)),
@@ -116,8 +115,7 @@ public sealed class CmsTools(GenericApiCaller caller, ILogger<CmsTools> logger)
                 $"metrics.{regionId.ToLowerInvariant()}.aliyuncs.com",
                 cancellationToken);
 
-            var datapoints = ToolResults.Find(result, "Datapoints");
-            return ToolResults.Text(datapoints ?? result);
+            return ToolResults.Text(ToolResults.Find(result, "Datapoints"));
         }
         catch (Exception exception)
         {

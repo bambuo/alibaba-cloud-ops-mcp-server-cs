@@ -24,6 +24,7 @@
 | `--tool-path` 安装 | `<仓库>/tools/alibaba-cloud-ops-mcp-server` | 无 |
 | 源码运行 | `dotnet` | `run --project <仓库>/src/AlibabaCloud.Ops.Mcp.Server --` |
 | 已发布目录 | `dotnet` | `<仓库>/publish/AlibabaCloud.Ops.Mcp.Server.dll` |
+| 自包含单文件 | `<解压目录>/alibaba-cloud-ops-mcp-server` | 无（首次启动会解压到临时目录） |
 
 ## 二、stdio：dotnet tool 全局安装
 
@@ -209,6 +210,22 @@ dotnet run --project src/AlibabaCloud.Ops.Mcp.Server -- \
 
 国际站会切换 `bssopenapi` 计费端点；与账号站点不匹配时云调用会失败。
 
+### 7.5 轻量应用服务器（SWAS）
+
+轻量应用服务器不是 ECS，`ECS_*` 工具查不到其实例。通过 `--extra-config` 追加 SWAS 动态工具：
+
+```json
+"args": [
+  "--transport", "stdio",
+  "--extra-config",
+  "{\"swas-open\":[\"ListInstances\",\"ListRegions\",\"ListInstanceStatus\",\"ListFirewallRules\",\"DescribeInstanceVncUrl\"]}"
+]
+```
+
+追加后工具名为 `SWAS-OPEN_ListInstances`、`SWAS-OPEN_ListRegions` 等，工具数由 40 变为 45。SWAS 的元数据服务码是 `SWAS-OPEN`，真实端点主机为 `swas.{region}.aliyuncs.com`，实现已内置该映射。
+
+如需重启、关机或执行命令，再按需追加 `StartInstance`、`StopInstance`、`RebootInstance`、`InvokeCommand`；这些接口具备破坏性，建议单独用一份客户端配置。
+
 ## 八、Docker
 
 镜像默认以 Streamable HTTP 启动：
@@ -289,5 +306,6 @@ docker run -d --name ops-mcp -p 8000:8000 \
 4. 调用返回 `InvalidServiceName`：服务码拼写错误，先用 `ListAPIs` 验证（需 `--services`）。
 5. HTTP 返回 404：路径必须是 `/mcp`；服务端需以 `--transport streamable-http` 启动。
 6. 中文乱码：客户端与容器统一 UTF-8；不要把日志写入 stdout。
+7. 云调用报 `The value cannot be an empty string. (Parameter 'path')`：单文件发布时未开启 `IncludeAllContentForSelfExtract`，`AlibabaCloud.OpenApiClient` 读到的 `Assembly.Location` 为空；按 README 的自包含发布命令重新打包。
 
 安全提示：`LOCAL_RunShellScript` 等同本地命令执行；HTTP 模式默认绑定 `127.0.0.1`，对外暴露前必须增加鉴权、TLS 与网络隔离。

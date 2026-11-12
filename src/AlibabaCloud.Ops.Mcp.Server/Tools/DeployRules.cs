@@ -58,9 +58,10 @@ public static class DeployRules
                 files = archive.Entries.Select(entry => entry.FullName).ToList();
             }
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException)
+        catch (Exception)
         {
-            return new DeployFileAnalysis("unknown", null, fileName, [], null);
+            // 上游吞掉全部归档读取异常，仍按 archive 处理（成员清单为空）
+            files = [];
         }
 
         return archiveType is null
@@ -103,7 +104,7 @@ public static class DeployRules
 
         foreach (var path in files)
         {
-            var name = path.Split('/')[^1];
+            var name = path.Replace('\\', '/').Split('/')[^1];
             var lower = name.ToLowerInvariant();
 
             if (lower.EndsWith(".jar", StringComparison.Ordinal))
@@ -241,11 +242,13 @@ public static class DeployRules
                     }
                 }
 
+                var matched = binary is not null;
                 binary ??= Path.GetFileNameWithoutExtension(fileName);
                 var binaryPath = isArchive && !string.IsNullOrEmpty(extractedDirName)
                     ? $"{extractedDirName}/{binary}"
                     : binary;
-                startCommand = $"[ -f {binaryPath} ] && chmod +x {binaryPath} && nohup ./{binaryPath} > /root/app.log 2>&1 & || true";
+                var suffix = matched ? string.Empty : " || true";
+                startCommand = $"[ -f {binaryPath} ] && chmod +x {binaryPath} && nohup ./{binaryPath} > /root/app.log 2>&1 &{suffix}";
                 break;
             }
 
@@ -257,7 +260,7 @@ public static class DeployRules
                 }
 
                 var imageName = NormalizeName(applicationName);
-                var portMapping = port is > 0 ? $"-p {port}:{port} " : string.Empty;
+                var portMapping = port.GetValueOrDefault() != 0 ? $"-p {port}:{port} " : string.Empty;
                 startCommand =
                     $"command -v docker >/dev/null 2>&1 && docker stop {imageName} 2>/dev/null || true && docker rm {imageName} 2>/dev/null || true && [ -f Dockerfile ] && docker build -t {imageName}:latest . && docker run -d --name {imageName} {portMapping}{imageName}:latest";
                 break;
@@ -301,7 +304,7 @@ public static class DeployRules
     {
         foreach (var name in preferred)
         {
-            var match = files.FirstOrDefault(file => file.EndsWith(name, StringComparison.OrdinalIgnoreCase));
+            var match = files.FirstOrDefault(file => file.EndsWith(name, StringComparison.Ordinal));
             if (match is not null)
             {
                 return match;
@@ -330,9 +333,10 @@ public static class DeployRules
         return !nonBinary.Contains(fileName);
     }
 
-    /// <summary>应用名转小写并把空格、下划线替换为连字符。</summary>
+    /// <summary>应用名转小写并把空格、下划线替换为连字符，空白名回落 app。</summary>
     private static string NormalizeName(string? applicationName) =>
-        (applicationName ?? "app").ToLowerInvariant().Replace(' ', '-').Replace('_', '-');
+        (string.IsNullOrWhiteSpace(applicationName) ? "app" : applicationName)
+        .ToLowerInvariant().Replace(' ', '-').Replace('_', '-');
 
     /// <summary>读取 tar 或 tar.gz 的成员名。</summary>
     private static List<string> ReadTar(string path, bool gzip)

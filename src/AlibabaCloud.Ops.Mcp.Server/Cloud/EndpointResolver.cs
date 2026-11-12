@@ -11,6 +11,10 @@ public sealed class EndpointResolver(ServerOptions options)
     private static readonly HashSet<string> CentralServices =
         new(StringComparer.OrdinalIgnoreCase) { "cbn", "ros", "ram" };
 
+    // 元数据服务码与真实端点主机名不一致时在此映射。
+    private static readonly Dictionary<string, string> ServiceHostAliases =
+        new(StringComparer.OrdinalIgnoreCase) { ["swas-open"] = "swas" };
+
     private static readonly Dictionary<string, HashSet<string>> DoubleEndpointRegions =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -57,6 +61,11 @@ public sealed class EndpointResolver(ServerOptions options)
             return regions.Contains(regionId)
                 ? $"{service}.aliyuncs.com"
                 : $"{service}.{regionId}.aliyuncs.com";
+        }
+
+        if (ServiceHostAliases.TryGetValue(service, out var host))
+        {
+            return $"{host}.{regionId}.aliyuncs.com";
         }
 
         return $"{service}.{regionId}.aliyuncs.com";

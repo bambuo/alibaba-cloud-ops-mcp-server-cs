@@ -21,7 +21,12 @@ public sealed class LocalTools
     {
         try
         {
-            var directory = ValidateDirectory(path);
+            var directory = ValidatePath(path);
+            if (!directory.Exists)
+            {
+                throw new ArgumentException($"Path is not a directory: {path}");
+            }
+
             var items = new List<JsonObject>();
 
             var entries = recursive
@@ -57,11 +62,9 @@ public sealed class LocalTools
         }
         catch (Exception exception)
         {
-            return Task.FromResult(ToolResults.Error(exception));
+            return Task.FromResult(ToolResults.Error("InvalidParameter", $"Failed to list directory: {exception.Message}"));
         }
     }
-
-    /// <summary>执行 shell 命令并返回输出、退出码与超时状态。</summary>
     /// <summary>执行 shell 命令并返回输出与退出码。</summary>
     [McpServerTool(Name = "LOCAL_RunShellScript")]
     [Description("执行 shell 脚本或命令。返回命令输出、错误信息和退出代码。注意：执行任意命令可能存在安全风险，请谨慎使用。")]
@@ -76,7 +79,7 @@ public sealed class LocalTools
         {
             if (timeout is <= 0 or > 86400)
             {
-                return ToolResults.Error("InvalidParameter: timeout must be between 1 and 86400 seconds");
+                return ToolResults.Error("InvalidParameter", "timeout must be between 1 and 86400 seconds");
             }
 
             var startInfo = new ProcessStartInfo
@@ -104,10 +107,19 @@ public sealed class LocalTools
             }
             else
             {
-                var parts = SplitArguments(script);
-                if (parts.Count == 0)
+                List<string> parts;
+                try
                 {
-                    return ToolResults.Error("InvalidParameter: script is empty");
+                    parts = SplitArguments(script);
+                    if (parts.Count == 0)
+                    {
+                        // 与上游 subprocess.run([]) 的异常文本一致
+                        throw new ArgumentException("list index out of range");
+                    }
+                }
+                catch (Exception exception)
+                {
+                    return ToolResults.Error("LocalExecutionFailed", $"Failed to execute command: {exception.Message}");
                 }
 
                 startInfo.FileName = parts[0];
@@ -119,12 +131,38 @@ public sealed class LocalTools
 
             if (!string.IsNullOrWhiteSpace(working_directory))
             {
-                var directory = ValidateDirectory(working_directory);
+                DirectoryInfo directory;
+                try
+                {
+                    directory = ValidatePath(working_directory);
+                }
+                catch (Exception exception)
+                {
+                    return ToolResults.Error("LocalExecutionFailed", $"Failed to execute command: {exception.Message}");
+                }
+
+                if (!directory.Exists)
+                {
+                    return ToolResults.Error("LocalExecutionFailed",
+                        $"Failed to execute command: Working directory is not a directory: {working_directory}");
+                }
+
                 startInfo.WorkingDirectory = directory.FullName;
             }
 
             using var process = new Process { StartInfo = startInfo };
-            process.Start();
+            try
+            {
+                process.Start();
+            }
+            catch (Exception exception)
+            {
+                var notFound = exception is System.ComponentModel.Win32Exception { NativeErrorCode: 2 or 3 }
+                               || exception.Message.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase);
+                return ToolResults.Error("LocalExecutionFailed", notFound
+                    ? $"Command or script not found: {script}"
+                    : $"Failed to execute command: {exception.Message}");
+            }
 
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutSource.CancelAfter(TimeSpan.FromSeconds(timeout));
@@ -143,7 +181,7 @@ public sealed class LocalTools
                     process.Kill(entireProcessTree: true);
                 }
 
-                return ToolResults.Error($"CommandTimeout: exceeded {timeout} seconds");
+                return ToolResults.Error("Timeout", $"Command execution timeout (exceeded {timeout} seconds)");
             }
 
             var result = new JsonObject
@@ -172,98 +210,141 @@ public sealed class LocalTools
     {
         try
         {
-            var root = ValidateDirectory(directory);
+            var root = ValidatePath(directory);
+            if (!root.Exists)
+            {
+                throw new ArgumentException($"路径不是目录: {directory}");
+            }
+
             var result = DeployAnalyzer.Analyze(root);
             return Task.FromResult(ToolResults.Text(result));
         }
         catch (Exception exception)
         {
-            return Task.FromResult(ToolResults.Error(exception));
+            return Task.FromResult(ToolResults.Error("InvalidParameter",
+                $"Failed to identify deployment method: {exception.Message}"));
         }
     }
 
-    /// <summary>按 POSIX 规则拆分命令行：支持单双引号包裹与反斜杠转义。</summary>
-    internal static IReadOnlyList<string> SplitArguments(string commandLine)
+    /// <summary>按 POSIX shlex.split 规则拆分命令：单引号内不转义，双引号内仅 \" 与 \\ 转义。</summary>
+    internal static List<string> SplitArguments(string script)
     {
-        var arguments = new List<string>();
+        var tokens = new List<string>();
         var current = new System.Text.StringBuilder();
-        var hasToken = false;
-        var quote = '\0';
+        var inToken = false;
+        var index = 0;
 
-        for (var index = 0; index < commandLine.Length; index++)
+        while (index < script.Length)
         {
-            var character = commandLine[index];
-            if (quote != '\0')
+            var character = script[index];
+            if (character is ' ' or '\t' or '\r' or '\n')
             {
-                if (character == quote)
+                if (inToken)
                 {
-                    quote = '\0';
-                }
-                else if (character == '\\' && quote == '"' && index + 1 < commandLine.Length)
-                {
-                    current.Append(commandLine[++index]);
-                }
-                else
-                {
-                    current.Append(character);
-                }
-
-                continue;
-            }
-
-            if (character is '\'' or '"')
-            {
-                quote = character;
-                hasToken = true;
-            }
-            else if (char.IsWhiteSpace(character))
-            {
-                if (hasToken)
-                {
-                    arguments.Add(current.ToString());
+                    tokens.Add(current.ToString());
                     current.Clear();
-                    hasToken = false;
+                    inToken = false;
+                }
+
+                index++;
+            }
+            else if (character == '\'')
+            {
+                inToken = true;
+                var end = script.IndexOf('\'', index + 1);
+                if (end < 0)
+                {
+                    throw new ArgumentException("No closing quotation");
+                }
+
+                current.Append(script, index + 1, end - index - 1);
+                index = end + 1;
+            }
+            else if (character == '"')
+            {
+                inToken = true;
+                index++;
+                var closed = false;
+                while (index < script.Length)
+                {
+                    var inner = script[index];
+                    if (inner == '"')
+                    {
+                        closed = true;
+                        index++;
+                        break;
+                    }
+
+                    if (inner == '\\' && index + 1 < script.Length)
+                    {
+                        var escaped = script[index + 1];
+                        if (escaped is '"' or '\\')
+                        {
+                            current.Append(escaped);
+                            index += 2;
+                        }
+                        else
+                        {
+                            current.Append('\\');
+                            index++;
+                        }
+                    }
+                    else
+                    {
+                        current.Append(inner);
+                        index++;
+                    }
+                }
+
+                if (!closed)
+                {
+                    throw new ArgumentException("No closing quotation");
                 }
             }
-            else if (character == '\\' && index + 1 < commandLine.Length)
+            else if (character == '\\')
             {
-                current.Append(commandLine[++index]);
-                hasToken = true;
+                if (index + 1 >= script.Length)
+                {
+                    throw new ArgumentException("No escaped character");
+                }
+
+                inToken = true;
+                current.Append(script[index + 1]);
+                index += 2;
             }
             else
             {
+                inToken = true;
                 current.Append(character);
-                hasToken = true;
+                index++;
             }
         }
 
-        if (quote != '\0')
+        if (inToken)
         {
-            throw new ArgumentException("InvalidParameter: unbalanced quotes");
+            tokens.Add(current.ToString());
         }
 
-        if (hasToken)
-        {
-            arguments.Add(current.ToString());
-        }
-
-        return arguments;
+        return tokens;
     }
 
-    /// <summary>校验路径存在且为目录。</summary>
-    private static DirectoryInfo ValidateDirectory(string path)
+    /// <summary>解析为规范化绝对路径；不存在或非法时统一报 Invalid path（与上游一致）。</summary>
+    private static DirectoryInfo ValidatePath(string path)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        try
         {
-            throw new ArgumentException("InvalidPath: path is required");
-        }
+            var resolved = Path.GetFullPath(path);
+            var directory = new DirectoryInfo(resolved);
+            if (!directory.Exists && !File.Exists(resolved))
+            {
+                throw new ArgumentException($"Path does not exist: {path}");
+            }
 
-        var directory = new DirectoryInfo(Path.GetFullPath(path));
-        if (!directory.Exists)
+            return directory;
+        }
+        catch (Exception)
         {
-            throw new DirectoryNotFoundException($"NotFound: {path}");
+            throw new ArgumentException($"Invalid path: {path}");
         }
-
-        return directory;
     }
 }

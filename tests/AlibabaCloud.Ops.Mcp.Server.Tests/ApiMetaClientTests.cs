@@ -31,7 +31,8 @@ public sealed class ApiMetaClientTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var client = new ApiMetaClient(new HttpClient(handler), NullLogger<ApiMetaClient>.Instance);
+        var client = new ApiMetaClient(new HttpClient(handler), new AlibabaCloud.Ops.Mcp.Server.Options.ServerOptions(),
+            TimeProvider.System, NullLogger<ApiMetaClient>.Instance);
 
         var meta = await client.GetApiMetaAsync("ecs", "DescribeInstances");
         var again = await client.GetApiMetaAsync("ecs", "DescribeInstances");
@@ -39,7 +40,7 @@ public sealed class ApiMetaClientTests
         Assert.Equal("查询实例", meta.Summary);
         Assert.Equal("2014-05-26", meta.Version);
         Assert.Single(meta.Parameters!);
-        Assert.Same(meta, again);
+        Assert.Equal("查询实例", again.Summary);
         Assert.Equal(3, handler.Count);
     }
 
@@ -50,7 +51,8 @@ public sealed class ApiMetaClientTests
             ? Json("""[{"code":"vpc","name":"VPC","defaultVersion":"2016-04-28","style":"RPC"}]""")
             : Json("""{"apis":{"DescribeVpcs":{},"DescribeVSwitches":{}}}"""));
 
-        var client = new ApiMetaClient(new HttpClient(handler), NullLogger<ApiMetaClient>.Instance);
+        var client = new ApiMetaClient(new HttpClient(handler), new AlibabaCloud.Ops.Mcp.Server.Options.ServerOptions(),
+            TimeProvider.System, NullLogger<ApiMetaClient>.Instance);
 
         var apis = await client.GetApiNamesAsync("vpc");
 
@@ -62,7 +64,8 @@ public sealed class ApiMetaClientTests
     {
         var handler = new StubHandler(_ => Json("""[]"""));
 
-        var client = new ApiMetaClient(new HttpClient(handler), NullLogger<ApiMetaClient>.Instance);
+        var client = new ApiMetaClient(new HttpClient(handler), new AlibabaCloud.Ops.Mcp.Server.Options.ServerOptions(),
+            TimeProvider.System, NullLogger<ApiMetaClient>.Instance);
 
         await Assert.ThrowsAsync<CloudApiException>(() => client.GetApiNamesAsync("nope"));
     }
@@ -75,13 +78,26 @@ public sealed class ApiMetaClientTests
             ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
             : Json("""[{"code":"ecs","name":"ECS","defaultVersion":"2014-05-26","style":"RPC"}]"""));
 
-        var client = new ApiMetaClient(new HttpClient(handler), NullLogger<ApiMetaClient>.Instance);
+        var client = new ApiMetaClient(new HttpClient(handler), new AlibabaCloud.Ops.Mcp.Server.Options.ServerOptions(),
+            TimeProvider.System, NullLogger<ApiMetaClient>.Instance);
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.GetProductsAsync());
         var products = await client.GetProductsAsync();
 
         Assert.Single(products);
         Assert.Equal(2, handler.Count);
+    }
+
+    [Fact]
+    public async Task Gives_up_after_three_attempts()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var client = new ApiMetaClient(new HttpClient(handler), new AlibabaCloud.Ops.Mcp.Server.Options.ServerOptions(),
+            TimeProvider.System, NullLogger<ApiMetaClient>.Instance);
+
+        var exception = await Assert.ThrowsAsync<CloudApiException>(() => client.GetProductsAsync());
+        Assert.Equal("DynamicMetaUnavailable", exception.Code);
+        Assert.Equal(3, handler.Count);
     }
 
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)

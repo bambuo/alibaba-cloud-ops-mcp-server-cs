@@ -16,13 +16,28 @@ using ModelContextProtocol.Server;
 try
 {
     var options = ServerOptions.Parse(args);
-    return options.Transport == TransportKind.Stdio
-        ? await RunStdioAsync(options)
-        : await RunHttpAsync(options);
+    if (options.Help)
+    {
+        Console.Out.WriteLine(ServerOptions.Usage);
+        return 0;
+    }
+
+    if (options.CodeDeploy && options.VisibleToolNames.Count > 0)
+    {
+        Console.Error.WriteLine("WARN: --code-deploy takes precedence over --visible-tools; whitelist ignored");
+    }
+
+    return options.Transport switch
+    {
+        TransportKind.Stdio => await RunStdioAsync(options),
+        TransportKind.StreamableHttp => await RunHttpAsync(options),
+        _ => await RunBothAsync(options),
+    };
 }
 catch (OptionException exception)
 {
     Console.Error.WriteLine(exception.Message);
+    Console.Error.WriteLine(ServerOptions.Usage);
     return 2;
 }
 
@@ -31,7 +46,11 @@ static void ConfigureServices(IServiceCollection services, ServerOptions options
 {
     services.AddSingleton(options);
     services.AddHttpContextAccessor();
-    services.AddHttpClient<ApiMetaClient>(client => client.Timeout = TimeSpan.FromSeconds(20));
+    services.AddHttpClient<ApiMetaClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
+        .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        });
     services.AddSingleton<EndpointResolver>();
     services.AddSingleton<ICredentialProvider, CredentialProvider>();
     services.AddSingleton<IDefaultCredentialChain, AliyunDefaultCredentialChain>();
@@ -76,16 +95,24 @@ static void RegisterStaticTools(IMcpServerBuilder mcp, ServerOptions options)
     if (options.CodeDeploy)
     {
         mcp.WithTools<CodeDeployTools>()
-            .WithTools<InstanceTools>()
-            .WithTools<LocalTools>();
+            .WithTools<InstanceTools>();
+        if (options.EnableLocalTools)
+        {
+            mcp.WithTools<LocalTools>();
+        }
+
         return;
     }
 
     mcp.WithTools<OosTools>()
         .WithTools<CmsTools>()
         .WithTools<OssTools>()
-        .WithTools<LocalTools>()
         .WithTools<CodeDeployTools>();
+
+    if (options.EnableLocalTools)
+    {
+        mcp.WithTools<LocalTools>();
+    }
 
     // 上游 visible-tools 模式会加载 application_management_tools，含静态 ECS_DescribeInstances；
     // 白名单过滤在 PostConfigure 完成，未命中时会被移除。
@@ -140,11 +167,20 @@ static async Task<int> RunHttpAsync(ServerOptions options)
     ConfigureServices(builder.Services, options);
     var mcp = AddMcpServer(builder.Services);
     RegisterStaticTools(mcp, options);
-    mcp.WithHttpTransport(transport => transport.Stateless = true);
+    mcp.WithHttpTransport(transport => transport.Stateless = false);
 
     var app = builder.Build();
     await RegisterDynamicToolsAsync(app.Services);
     app.MapMcp("/mcp");
     await app.RunAsync();
+    return 0;
+}
+
+// both 传输：同进程并行提供 stdio 与 Streamable HTTP，两者工具面一致。
+static async Task<int> RunBothAsync(ServerOptions options)
+{
+    var http = RunHttpAsync(options);
+    var stdio = RunStdioAsync(options);
+    await Task.WhenAll(http, stdio);
     return 0;
 }

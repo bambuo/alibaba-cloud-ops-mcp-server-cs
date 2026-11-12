@@ -105,17 +105,19 @@ public sealed class ToolOptionsSetupTests
 
             if (path.Contains("/apis.json") || path.Contains("/overview.json"))
             {
-                return Json("""{"apis":{"DescribeInstances":{}}}""");
+                return Json("""{"apis":{"DescribeInstances":{},"DescribeRegions":{}}}""");
             }
 
             return Json("""{"summary":"查询实例","path":"/","methods":["post"],"parameters":[{"name":"RegionId","in":"query","schema":{"type":"string"}}]}""");
         });
 
-        var meta = new ApiMetaClient(new HttpClient(handler), NullLogger<ApiMetaClient>.Instance);
+        var meta = new ApiMetaClient(new HttpClient(handler), options, TimeProvider.System,
+            NullLogger<ApiMetaClient>.Instance);
         var caller = new GenericApiCaller(
             meta,
             new EndpointResolver(options),
             new StaticCredentials(),
+            TimeProvider.System,
             NullLogger<GenericApiCaller>.Instance);
         var factory = new DynamicApiToolFactory(meta, caller, NullLogger<DynamicApiToolFactory>.Instance);
 
@@ -130,6 +132,8 @@ public sealed class ToolOptionsSetupTests
     private sealed class StaticCredentials : ICredentialProvider
     {
         public CloudCredentials Resolve() => new("ak", "sk", null, "test");
+
+        public CloudCredentials ResolveForOss() => Resolve();
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler

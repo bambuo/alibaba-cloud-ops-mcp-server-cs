@@ -8,3 +8,4 @@ nupkg/
 .idea/
 TestResults/
 coverage*.xml
+dist/

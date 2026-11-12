@@ -11,19 +11,47 @@ public sealed class GenericCallerHelperTests
     {
         using var document = JsonDocument.Parse("""["i-1","i-2"]""");
 
-        var value = GenericApiCaller.SerializeQueryValue("ecs", "InstanceIds", document.RootElement);
+        var prepared = GenericApiCaller.PrepareValue("ecs", "InstanceIds", document.RootElement);
 
-        Assert.Equal("""["i-1","i-2"]""", value);
+        Assert.Equal("""["i-1","i-2"]""", GenericApiCaller.ScalarText(prepared));
     }
 
     [Fact]
-    public void Non_ecs_array_parameters_keep_raw_json()
+    public void Ecs_list_json_is_compact()
     {
-        using var document = JsonDocument.Parse("""["a"]""");
+        using var document = JsonDocument.Parse("""[ "i-1", "i-2" ]""");
 
-        var value = GenericApiCaller.SerializeQueryValue("vpc", "Any", document.RootElement);
+        var prepared = GenericApiCaller.PrepareValue("ecs", "InstanceIds", document.RootElement);
 
-        Assert.Equal("""["a"]""", value);
+        Assert.Equal("""["i-1","i-2"]""", GenericApiCaller.ScalarText(prepared));
+    }
+
+    [Fact]
+    public void Non_ecs_arrays_are_flattened_with_one_based_index()
+    {
+        using var document = JsonDocument.Parse("""["a","b"]""");
+        var query = new Dictionary<string, string>();
+
+        GenericApiCaller.Flatten(query, "Any", document.RootElement);
+
+        Assert.Equal("a", query["Any.1"]);
+        Assert.Equal("b", query["Any.2"]);
+    }
+
+    [Fact]
+    public void Nested_structures_are_flattened_like_openapiutil()
+    {
+        using var document = JsonDocument.Parse("""{"Tag":[{"Key":"k","Value":"v"}],"Obj":{"field":1}}""");
+        var query = new Dictionary<string, string>();
+
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            GenericApiCaller.Flatten(query, property.Name, property.Value);
+        }
+
+        Assert.Equal("k", query["Tag.1.Key"]);
+        Assert.Equal("v", query["Tag.1.Value"]);
+        Assert.Equal("1", query["Obj.field"]);
     }
 
     [Theory]
@@ -34,7 +62,7 @@ public sealed class GenericCallerHelperTests
     {
         using var document = JsonDocument.Parse(json);
 
-        Assert.Equal(expected, GenericApiCaller.SerializeQueryValue("ecs", "Field", document.RootElement));
+        Assert.Equal(expected, GenericApiCaller.ScalarText(document.RootElement));
     }
 
     [Fact]
@@ -66,7 +94,7 @@ public sealed class GenericCallerHelperTests
     {
         using var document = JsonDocument.Parse("false");
 
-        Assert.Equal("false", GenericApiCaller.SerializeQueryValue("ecs", "DryRun", document.RootElement));
+        Assert.Equal("false", GenericApiCaller.ScalarText(document.RootElement));
     }
 
     [Fact]

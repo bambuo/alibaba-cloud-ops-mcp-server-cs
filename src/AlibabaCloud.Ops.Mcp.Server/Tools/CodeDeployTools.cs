@@ -20,7 +20,7 @@ public sealed class CodeDeployTools(
     private const string ManagementRegion = "cn-hangzhou";
     private static string? _projectRoot;
 
-    private static readonly Dictionary<string, string> PackageMap = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, string> PackageMap = new(StringComparer.Ordinal)
     {
         ["docker"] = "ACS-Extension-DockerCE-1853370294850618",
         ["java"] = "ACS-Extension-java-1853370294850618",
@@ -33,7 +33,58 @@ public sealed class CodeDeployTools(
 
     /// <summary>部署应用到目标实例组。</summary>
     [McpServerTool(Name = "OOS_CodeDeploy")]
-    [Description("将应用部署到阿里云ECS实例。使用阿里云OOS（运维编排服务）的CodeDeploy功能实现自动化部署。")]
+    [Description("""
+        将应用部署到阿里云ECS实例。使用阿里云OOS（运维编排服务）的CodeDeploy功能实现自动化部署。
+
+        ## 前置条件（调用此工具前需完成）
+
+        1. **识别项目类型**：读取项目配置文件（package.json、pom.xml、requirements.txt等），确定技术栈和部署语言（通过deploy_language参数传入）
+        2. **构建部署产物**：执行构建命令生成压缩包（tar.gz、zip等），保存到 `.code_deploy/release` 目录
+        3. **准备ECS实例**：确保目标ECS实例已创建，获取实例ID列表
+
+        ## ⚠️ 重要提示：启动和停止命令参数
+
+        **正常情况下，不需要提供 application_start 和 application_stop 参数！**
+
+        - 系统会自动通过规则引擎分析部署文件和 deploy_language，自动生成启动和停止命令
+        - 自动生成的命令包含所有必要的防御性检查（文件存在性、路径存在性等）
+        - 自动生成的命令正确处理压缩包解压、目录切换、后台运行、日志重定向等
+        - 对于 Node.js 应用，自动生成的命令会先执行 `npm install` 安装依赖
+
+        **只有在以下情况下才需要手动提供这两个参数：**
+        1. 用户明确指定了自定义的启动/停止命令
+        2. 用户提供了关于启动/停止命令的特殊要求或说明
+
+        **调用建议：直接调用工具，不传 application_start 和 application_stop 参数即可。**
+
+        ## 自动生成的命令规范（供参考，了解即可）
+
+        ### 1. 防御性命令设计
+        自动生成的命令包含存在性检查，避免因路径/文件/命令不存在导致失败：
+        - 压缩包：先检查文件存在再解压 `[ -f app.tar.gz ] && tar -xzf app.tar.gz || exit 1`
+        - 可执行文件：检查文件存在再执行 `[ -f start.sh ] && chmod +x start.sh && ./start.sh || exit 1`
+        - 命令可用性：检查命令是否存在 `command -v npm >/dev/null 2>&1 || exit 1`
+        - 目录切换：先验证路径存在再切换 `[ -d dir ] && cd dir || exit 1`
+
+        ### 2. 压缩包处理规范
+        如果产物是压缩包，自动生成的命令会先解压：
+        - 使用非交互式命令：`tar -xzf`、`unzip -o`（自动覆盖，无需确认）
+        - 解压后执行启动命令，确保路径对应
+        - 示例：`tar -xzf app.tar.gz && [ -d app ] && cd app && nohup java -jar app.jar > /root/app.log 2>&1 &`
+
+        ### 3. 后台运行与日志
+        自动生成的启动命令使用后台运行并重定向日志：
+        - 格式：`nohup <command> > /root/app.log 2>&1 &`
+        - 说明：nohup保持后台运行，`>` 重定向标准输出，`2>&1` 合并错误输出，`&` 后台执行
+
+        ## 注意事项
+
+        - 应用和应用分组会自动检查，已存在则跳过创建
+        - 未提供ECS实例ID时，工具会返回创建引导链接
+        - 部署信息自动保存到 `.code_deploy/.application.json`
+        - project_path未提供时，会从file_path推断或使用当前目录
+        - 部署完成后，以markdown格式展示service_link供用户跳转
+        """)]
     public async Task<CallToolResult> CodeDeploy(
         [Description("name of the application")] string name,
         [Description("Region ID for deployment")] string deploy_region_id,
@@ -42,9 +93,9 @@ public sealed class CodeDeployTools(
         [Description("Local file path to upload. If the file is not in .code_deploy/release directory, it will be copied there.")] string file_path,
         [Description("Deploy language, like:docker, java, python, nodejs, golang")] string deploy_language,
         [Description("Application listening port")] int port,
-        [Description("Root path of the project. The .code_deploy directory will be created in this path.")] string project_path,
-        [Description("**OPTIONAL - DO NOT PROVIDE UNLESS USER EXPLICITLY REQUIRES IT** Application start command script.")] string? application_start = null,
-        [Description("**OPTIONAL - DO NOT PROVIDE UNLESS USER EXPLICITLY REQUIRES IT** Application stop command script.")] string? application_stop = null,
+        [Description("Root path of the project. The .code_deploy directory will be created in this path. If not provided, will try to infer from file_path or use current working directory.")] string project_path,
+        [Description("**OPTIONAL - DO NOT PROVIDE UNLESS USER EXPLICITLY REQUIRES IT** Application start command script. In normal cases, you should NOT provide this parameter. The system will automatically generate the start command using rule engine based on deployment file analysis and deploy_language. Only provide this parameter when: (1) User explicitly specifies a custom start command, or (2) User provides specific instructions about the start command. The auto-generated command includes defensive checks for file/path existence and proper archive extraction. If you must provide a custom command, ensure it includes defensive checks like \"[ -f file ] && command\" and handles archive extraction properly.")] string? application_start = null,
+        [Description("**OPTIONAL - DO NOT PROVIDE UNLESS USER EXPLICITLY REQUIRES IT** Application stop command script. In normal cases, you should NOT provide this parameter. The system will automatically generate the stop command using rule engine based on deploy_language. Only provide this parameter when: (1) User explicitly specifies a custom stop command, or (2) User provides specific instructions about the stop command. The auto-generated command includes defensive checks and proper process termination.")] string? application_stop = null,
         [Description("AlibabaCloud ECS instance ID List. If empty or not provided, user will be prompted to create ECS instances.")] List<string>? instance_ids = null,
         CancellationToken cancellationToken = default)
     {
@@ -52,8 +103,6 @@ public sealed class CodeDeployTools(
         {
             var projectRoot = ResolveProjectRoot(project_path, file_path);
             _projectRoot = projectRoot;
-            var releaseDirectory = Path.Combine(projectRoot, ".code_deploy", "release");
-            Directory.CreateDirectory(releaseDirectory);
 
             if (instance_ids is null || instance_ids.Count == 0)
             {
@@ -67,10 +116,13 @@ public sealed class CodeDeployTools(
                 return ToolResults.Text(BuildInstanceNotFound(deploy_region_id, instance_ids, missing));
             }
 
+            var releaseDirectory = Path.Combine(projectRoot, ".code_deploy", "release");
+            Directory.CreateDirectory(releaseDirectory);
+
             var sourcePath = Path.GetFullPath(file_path);
             if (!File.Exists(sourcePath))
             {
-                return ToolResults.Error($"NotFound: {sourcePath}");
+                return ToolResults.Error("ResourceNotFound", $"File does not exist: {sourcePath}");
             }
 
             var releasePath = Path.Combine(releaseDirectory, Path.GetFileName(sourcePath));
@@ -79,17 +131,35 @@ public sealed class CodeDeployTools(
                 File.Copy(sourcePath, releasePath, overwrite: true);
             }
 
-            if (string.IsNullOrWhiteSpace(application_start) || string.IsNullOrWhiteSpace(application_stop))
+            var releaseFilePath = Path.GetFullPath(releasePath);
+            if (application_start is null || application_stop is null)
             {
-                var analysis = DeployRules.AnalyzeFile(releasePath);
-                application_start ??= DeployRules.GenerateStartCommand(
-                    releasePath, deploy_language, analysis, analysis.ExtractedDirName, name, port);
-                application_stop ??= DeployRules.GenerateStopCommand(deploy_language, name);
-            }
+                string? generatedStart = null;
+                string? generatedStop = null;
+                try
+                {
+                    var analysis = DeployRules.AnalyzeFile(releaseFilePath);
+                    generatedStart = DeployRules.GenerateStartCommand(
+                        releaseFilePath, deploy_language, analysis, analysis.ExtractedDirName, name, port);
+                    generatedStop = DeployRules.GenerateStopCommand(deploy_language, name);
+                }
+                catch (Exception exception)
+                {
+                    // 上游命令规则引擎整体兜底，失败时按缺少启动命令处理
+                    logger.LogWarning("Failed to generate deploy commands: {Message}", exception.Message);
+                }
 
-            if (string.IsNullOrWhiteSpace(application_start))
-            {
-                return ToolResults.Text(BuildStartCommandRequired(file_path, deploy_language));
+                if (application_start is null)
+                {
+                    if (generatedStart is null)
+                    {
+                        return ToolResults.Text(BuildStartCommandRequired(releaseFilePath, deploy_language));
+                    }
+
+                    application_start = generatedStart;
+                }
+
+                application_stop ??= generatedStop;
             }
 
             string bucket;
@@ -97,7 +167,7 @@ public sealed class CodeDeployTools(
             {
                 bucket = await EnsureBucketAsync(name, cancellationToken);
             }
-            catch (Aliyun.OSS.Common.OssException exception)
+            catch (OpsException exception) when (exception.Code == "OssNotActivated")
             {
                 logger.LogWarning("OSS bucket unavailable for {Name}: {Message}", name, exception.Message);
                 return ToolResults.Text(BuildOssNotActivated());
@@ -165,7 +235,7 @@ public sealed class CodeDeployTools(
                 : $"https://ecs.console.aliyun.com/server/{instanceId}/group?regionId={deploy_region_id}#/";
             return ToolResults.Text(new JsonObject
             {
-                ["response"] = response?.DeepClone(),
+                ["response"] = ToolResults.Find(response, "body")?.DeepClone(),
                 ["service_link"] = serviceLink,
                 ["security_group_link"] = securityGroupLink,
                 ["port"] = port,
@@ -259,11 +329,32 @@ public sealed class CodeDeployTools(
                 }));
             }
 
-            var info = JsonNode.Parse(File.ReadAllText(statePath))?["last_deployment"]?.DeepClone() ?? new JsonObject();
+            JsonObject? info = null;
+            try
+            {
+                if (JsonNode.Parse(File.ReadAllText(statePath)) is JsonObject parsed)
+                {
+                    info = parsed["last_deployment"] as JsonObject;
+                }
+            }
+            catch (Exception)
+            {
+                info = null;
+            }
+
+            if (info is null)
+            {
+                return Task.FromResult(ToolResults.Text(new JsonObject
+                {
+                    ["message"] = "No information found about the last deployment",
+                    ["info"] = new JsonObject(),
+                }));
+            }
+
             return Task.FromResult(ToolResults.Text(new JsonObject
             {
                 ["message"] = "Successfully retrieved last deployment information",
-                ["info"] = info,
+                ["info"] = info.DeepClone(),
             }));
         }
         catch (Exception exception)
@@ -287,48 +378,89 @@ public sealed class CodeDeployTools(
     private async Task<JsonNode?> DescribeInstancesAsync(string regionId, IReadOnlyList<string> instanceIds, CancellationToken cancellationToken) =>
         await DescribeInstancesCoreAsync(regionId, instanceIds, cancellationToken);
 
-    /// <summary>在响应文本中判断实例 ID 是否存在。</summary>
-    private static bool ContainsInstance(JsonNode? response, string instanceId) =>
-        response?.ToJsonString().Contains(instanceId, StringComparison.OrdinalIgnoreCase) == true;
-
-    /// <summary>确保确定性命名的部署 Bucket 存在并返回名称。</summary>
-    private async Task<string> EnsureBucketAsync(string applicationName, CancellationToken cancellationToken)
+    /// <summary>按响应体中的实例 ID 集合精确判断实例是否存在。</summary>
+    internal static bool ContainsInstance(JsonNode? response, string instanceId)
     {
-        var credentials = credentialProvider.Resolve();
+        var body = ToolResults.Find(response, "body");
+        if (body?["Instances"]?["Instance"] is not JsonArray instances)
+        {
+            return false;
+        }
+
+        return instances.OfType<JsonObject>()
+            .Select(item => item["InstanceId"]?.GetValue<string>())
+            .Any(id => string.Equals(id, instanceId, StringComparison.Ordinal));
+    }
+
+    /// <summary>按标签复用部署 Bucket，不存在时以 UUID 命名创建并打标。</summary>
+    private Task<string> EnsureBucketAsync(string applicationName, CancellationToken cancellationToken)
+    {
+        var credentials = credentialProvider.ResolveForOss();
         var client = new OssClient("https://oss-cn-hangzhou.aliyuncs.com",
             credentials.AccessKeyId, credentials.AccessKeySecret, credentials.SecurityToken);
 
-        var normalized = new string(applicationName.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray());
-        var bucket = $"app-{normalized}-code-deploy";
-        if (bucket.Length > 63)
+        var existing = FindBucketByTag(client);
+        if (existing is not null)
         {
-            bucket = bucket[..63];
+            return Task.FromResult(existing);
         }
 
-        if (!client.DoesBucketExist(bucket))
+        var bucketName = "code-deploy-" + Guid.NewGuid().ToString("N")[..8];
+        try
         {
-            client.CreateBucket(bucket);
-            logger.LogInformation("Created OSS bucket {Bucket}", bucket);
+            client.CreateBucket(new CreateBucketRequest(bucketName)
+            {
+                StorageClass = Aliyun.OSS.StorageClass.Standard,
+                DataRedundancyType = Aliyun.OSS.DataRedundancyType.LRS,
+            });
+            var tagging = new SetBucketTaggingRequest(bucketName);
+            tagging.Tags.Add(new Tag { Key = "app_management", Value = "code_deploy" });
+            client.SetBucketTagging(tagging);
+            logger.LogInformation("Created OSS bucket {Bucket}", bucketName);
+            return Task.FromResult(bucketName);
         }
-
-        return bucket;
+        catch (Exception exception) when (exception is Aliyun.OSS.Common.OssException or Aliyun.OSS.Common.ClientException)
+        {
+            // 上游对建桶的任意 OperationError 都给出 OSS 开通引导
+            throw new OpsException("OssNotActivated",
+                $"OSS service is not activated or the bucket cannot be created: {exception.Message}");
+        }
     }
 
-    /// <summary>上传产物到 OSS，返回版本号。</summary>
-    private string Upload(string bucket, string objectName, string filePath)
+    /// <summary>按 app_management=code_deploy 标签查找首个匹配桶，出错时返回 null。</summary>
+    private static string? FindBucketByTag(OssClient client)
     {
-        var credentials = credentialProvider.Resolve();
+        try
+        {
+            var request = new ListBucketsRequest
+            {
+                Tag = new Tag { Key = "app_management", Value = "code_deploy" },
+            };
+            return client.ListBuckets(request).Buckets.FirstOrDefault()?.Name;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>上传产物到 OSS，返回版本号（未开启版本控制时为 null）。</summary>
+    private string? Upload(string bucket, string objectName, string filePath)
+    {
+        var credentials = credentialProvider.ResolveForOss();
         var client = new OssClient("https://oss-cn-hangzhou.aliyuncs.com",
             credentials.AccessKeyId, credentials.AccessKeySecret, credentials.SecurityToken);
         using var stream = File.OpenRead(filePath);
-        var result = client.PutObject(bucket, objectName, stream);
-        return result.VersionId ?? string.Empty;
+        var request = new PutObjectRequest(bucket, objectName, stream);
+        request.Metadata.ContentType = "application/octet-stream";
+        var result = client.PutObject(request);
+        return result.VersionId;
     }
 
     /// <summary>应用不存在时创建。</summary>
     private async Task EnsureApplicationAsync(string name, CancellationToken cancellationToken)
     {
-        if (await ExistsAsync("GetApplication", name, null, cancellationToken))
+        if (await ExistsAsync("GetApplication", name, null, "EntityNotExists.Application", cancellationToken))
         {
             return;
         }
@@ -337,37 +469,43 @@ public sealed class CodeDeployTools(
         {
             ["RegionId"] = JsonSerializer.SerializeToElement(ManagementRegion),
             ["Name"] = JsonSerializer.SerializeToElement(name),
+            ["AlarmConfig"] = JsonSerializer.SerializeToElement("{}"),
         };
         await caller.CallAsync("oos", "CreateApplication", arguments, cancellationToken);
     }
 
     /// <summary>判断应用分组是否已存在。</summary>
     private async Task<bool> ApplicationGroupExistsAsync(string name, string groupName, CancellationToken cancellationToken) =>
-        await ExistsAsync("GetApplicationGroup", name, groupName, cancellationToken);
+        await ExistsAsync("GetApplicationGroup", name, groupName, "EntityNotExists.ApplicationGroup", cancellationToken);
 
-    /// <summary>以 Get 接口探测资源是否存在，云端报错视为不存在。</summary>
-    private async Task<bool> ExistsAsync(string api, string name, string? groupName, CancellationToken cancellationToken)
+    /// <summary>以 Get 接口探测资源是否存在，仅对应的 EntityNotExists 码视为不存在。</summary>
+    private async Task<bool> ExistsAsync(string api, string name, string? groupName, string missingCode, CancellationToken cancellationToken)
     {
         try
         {
             var arguments = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
             {
                 ["RegionId"] = JsonSerializer.SerializeToElement(ManagementRegion),
-                ["ApplicationName"] = JsonSerializer.SerializeToElement(name),
                 ["Name"] = JsonSerializer.SerializeToElement(groupName ?? name),
             };
+            if (groupName is not null)
+            {
+                arguments["ApplicationName"] = JsonSerializer.SerializeToElement(name);
+            }
+
             await caller.CallAsync("oos", api, arguments, cancellationToken);
             return true;
         }
-        catch (CloudApiException exception) when (IsMissingEntity(exception))
+        catch (CloudApiException exception) when (IsMissingEntity(exception, missingCode))
         {
             return false;
         }
     }
 
-    /// <summary>仅把 EntityNotExists.* 视为不存在，其余云端错误继续上抛。</summary>
-    internal static bool IsMissingEntity(CloudApiException exception) =>
-        exception.Message.Contains("EntityNotExists", StringComparison.OrdinalIgnoreCase);
+    /// <summary>仅把对应的 EntityNotExists 精确错误码视为不存在，其余云端错误继续上抛。</summary>
+    internal static bool IsMissingEntity(CloudApiException exception, string code) =>
+        string.Equals(exception.Code, code, StringComparison.Ordinal)
+        || exception.Message.Contains(code, StringComparison.Ordinal);
 
     /// <summary>创建应用分组并指定部署地域。</summary>
     private async Task CreateApplicationGroupAsync(string name, string groupName, string deployRegion, CancellationToken cancellationToken)
@@ -382,29 +520,72 @@ public sealed class CodeDeployTools(
         await caller.CallAsync("oos", "CreateApplicationGroup", arguments, cancellationToken);
     }
 
-    /// <summary>按应用/分组给实例打标，供分组识别。</summary>
+    /// <summary>仅为缺少分组标签的实例补打标，已带标签的跳过。</summary>
     private async Task TagInstancesAsync(
         string regionId, string name, string groupName, IReadOnlyList<string> instanceIds, CancellationToken cancellationToken)
     {
+        var tagKey = $"app-{name}";
+        var pending = new List<string>();
+        foreach (var instanceId in instanceIds)
+        {
+            if (!await HasTagAsync(regionId, instanceId, tagKey, groupName, cancellationToken))
+            {
+                pending.Add(instanceId);
+            }
+        }
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
         var arguments = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
         {
             ["RegionId"] = JsonSerializer.SerializeToElement(regionId),
             ["ResourceType"] = JsonSerializer.SerializeToElement("Instance"),
-            ["Tag.1.Key"] = JsonSerializer.SerializeToElement($"app-{name}"),
+            ["Tag.1.Key"] = JsonSerializer.SerializeToElement(tagKey),
             ["Tag.1.Value"] = JsonSerializer.SerializeToElement(groupName),
         };
 
-        for (var i = 0; i < instanceIds.Count; i++)
+        for (var i = 0; i < pending.Count; i++)
         {
-            arguments[$"ResourceId.{i + 1}"] = JsonSerializer.SerializeToElement(instanceIds[i]);
+            arguments[$"ResourceId.{i + 1}"] = JsonSerializer.SerializeToElement(pending[i]);
         }
 
         await caller.CallAsync("ecs", "TagResources", arguments, cancellationToken);
     }
 
+    /// <summary>判断实例是否已带指定标签，查询失败时按未带标签处理。</summary>
+    private async Task<bool> HasTagAsync(
+        string regionId, string instanceId, string key, string value, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await DescribeInstancesCoreAsync(regionId, [instanceId], cancellationToken);
+            var body = ToolResults.Find(response, "body");
+            if (body?["Instances"]?["Instance"] is not JsonArray instances || instances.Count == 0)
+            {
+                return false;
+            }
+
+            if (instances[0]?["Tags"]?["Tag"] is not JsonArray tags)
+            {
+                return false;
+            }
+
+            return tags.OfType<JsonObject>().Any(tag =>
+                string.Equals(tag["TagKey"]?.GetValue<string>(), key, StringComparison.Ordinal)
+                && string.Equals(tag["TagValue"]?.GetValue<string>(), value, StringComparison.Ordinal));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     /// <summary>为已有分组创建 OSS 部署版本，返回 RevisionId。</summary>
     private async Task<string> CreateRevisionAsync(
-        string name, string bucket, string objectName, string versionId, string deployRegion,
+        string name, string bucket, string objectName, string? versionId, string deployRegion,
         string applicationStart, string applicationStop, CancellationToken cancellationToken)
     {
         var location = JsonSerializer.Serialize(new
@@ -413,7 +594,7 @@ public sealed class CodeDeployTools(
             bucketName = bucket,
             objectName,
             versionId,
-            isInternal = deployRegion.Equals(ManagementRegion, StringComparison.OrdinalIgnoreCase) ? "true" : "false",
+            isInternal = deployRegion.Equals(ManagementRegion, StringComparison.Ordinal) ? "true" : "false",
         });
         var hooks = JsonSerializer.Serialize(new
         {
@@ -432,12 +613,12 @@ public sealed class CodeDeployTools(
             ["Hooks"] = JsonSerializer.SerializeToElement(hooks),
         };
         var response = await caller.CallAsync("oos", "CreateDeployRevision", arguments, cancellationToken);
-        return ToolResults.Find(response, "RevisionId")?.GetValue<string>() ?? string.Empty;
+        return ToolResults.Find(response, "RevisionId")?.GetValue<string>() ?? "None";
     }
 
     /// <summary>生成新分组 oss-revision 模板所需参数。</summary>
     private static JsonObject BuildNewGroupParameters(
-        string name, string groupName, string bucket, string objectName, string versionId,
+        string name, string groupName, string bucket, string objectName, string? versionId,
         string deployRegion, int port, IReadOnlyList<string> instanceIds,
         string applicationStart, string applicationStop, string deployLanguage)
     {
@@ -631,15 +812,33 @@ public sealed class CodeDeployTools(
         return Path.GetDirectoryName(Path.GetFullPath(filePath))!;
     }
 
-    /// <summary>把应用与分组信息写入 .code_deploy/application.json。</summary>
-    private static void SaveApplicationInfo(
+    /// <summary>把应用与分组信息合并写入 .code_deploy/application.json；写盘失败只记日志。</summary>
+    internal void SaveApplicationInfo(
         string projectRoot, string name, string groupName, string deployRegion, int port, IReadOnlyList<string> instanceIds)
     {
-        var directory = Path.Combine(projectRoot, ".code_deploy");
-        Directory.CreateDirectory(directory);
-        var payload = new JsonObject
+        try
         {
-            ["last_deployment"] = new JsonObject
+            var directory = Path.Combine(projectRoot, ".code_deploy");
+            Directory.CreateDirectory(directory);
+            var file = Path.Combine(directory, "application.json");
+
+            var existing = new JsonObject();
+            if (File.Exists(file))
+            {
+                try
+                {
+                    if (JsonNode.Parse(File.ReadAllText(file)) is JsonObject parsed)
+                    {
+                        existing = parsed;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // 损坏的旧文件直接覆盖
+                }
+            }
+
+            existing["last_deployment"] = new JsonObject
             {
                 ["application_name"] = name,
                 ["application_group_name"] = groupName,
@@ -647,8 +846,14 @@ public sealed class CodeDeployTools(
                 ["port"] = port,
                 ["instance_ids"] = new JsonArray(instanceIds.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
                 ["deploy_time"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-            },
-        };
-        File.WriteAllText(Path.Combine(directory, "application.json"), payload.ToJsonString());
+            };
+
+            File.WriteAllText(file, existing.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception exception)
+        {
+            // 上游写盘失败只记录日志，部署本身仍算成功
+            logger.LogError("Failed to save deployment information: {Message}", exception.Message);
+        }
     }
 }

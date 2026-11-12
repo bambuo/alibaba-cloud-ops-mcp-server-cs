@@ -13,6 +13,9 @@ public interface ICredentialProvider
 {
     /// <summary>返回可用凭证，解析失败抛 <see cref="MissingCredentialsException"/>。</summary>
     CloudCredentials Resolve();
+
+    /// <summary>OSS 专用：与上游一致地忽略 headers-credential-only 限制，始终回落默认链。</summary>
+    CloudCredentials ResolveForOss();
 }
 
 /// <summary>默认凭证链抽象，便于在无云环境时替换实现。</summary>
@@ -73,9 +76,22 @@ public sealed class CredentialProvider(
 
         if (options.HeadersCredentialOnly)
         {
-            throw new MissingCredentialsException("MissingCredentials: headers-credential-only is enabled");
+            throw new MissingCredentialsException("No Alibaba Cloud credential available in request headers.");
         }
 
+        return ResolveFromFallback();
+    }
+
+    /// <summary>OSS 凭证解析：请求头优先，否则无条件回落环境变量与默认链。</summary>
+    public CloudCredentials ResolveForOss()
+    {
+        var fromHeaders = ResolveFromHeaders();
+        return fromHeaders ?? ResolveFromFallback();
+    }
+
+    /// <summary>按「环境变量 → 默认链」回落，全部失败时抛凭证缺失。</summary>
+    private CloudCredentials ResolveFromFallback()
+    {
         var fromEnvironment = ResolveFromEnvironment();
         if (fromEnvironment is not null)
         {
@@ -90,10 +106,11 @@ public sealed class CredentialProvider(
             return fromChain;
         }
 
-        throw new MissingCredentialsException("MissingCredentials: no AccessKey found in headers or environment");
+        throw new MissingCredentialsException(
+            "No Alibaba Cloud credential available. Configure environment variables, the CLI profile, or an instance RAM role.");
     }
 
-    /// <summary>读取请求头凭证，缺少 id 或 secret 时视为未提供。</summary>
+    /// <summary>读取请求头凭证，只要 AccessKeyId 非空即采用（与上游一致，secret 可缺失）。</summary>
     private CloudCredentials? ResolveFromHeaders()
     {
         var headers = httpContextAccessor.HttpContext?.Request.Headers;
@@ -103,12 +120,12 @@ public sealed class CredentialProvider(
         }
 
         var id = headers[HeaderAccessKeyId].ToString();
-        var secret = headers[HeaderAccessKeySecret].ToString();
-        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(secret))
+        if (string.IsNullOrWhiteSpace(id))
         {
             return null;
         }
 
+        var secret = headers[HeaderAccessKeySecret].ToString();
         var token = headers[HeaderSecurityToken].ToString();
         return new CloudCredentials(id, secret, string.IsNullOrWhiteSpace(token) ? null : token, "headers");
     }

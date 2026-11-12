@@ -93,7 +93,7 @@
 | Q1 | SSE 是否提供兼容层 | 不做 |
 | Q2 | `ForeceStop` 是否改名 | 保留 |
 | Q3 | `OSS_PutObject` 是否注册 | 不注册 |
-| Q4 | `--extra-config` 是否支持 Python 单引号字面量 | 仅 JSON |
+| Q4 | `--extra-config` 是否支持 Python 单引号字面量 | 已支持，解析失败告警后忽略 |
 | Q5 | 本地工具是否限制根目录 | 增加可选开关 |
 | Q6 | 元数据接口不可达是否降级 | 降级为静态工具 |
 | Q7 | 是否做 Python 双跑对账 | 纯逻辑部分做 |

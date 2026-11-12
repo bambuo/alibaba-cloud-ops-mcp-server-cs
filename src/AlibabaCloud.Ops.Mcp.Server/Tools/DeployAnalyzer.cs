@@ -49,7 +49,7 @@ public static partial class DeployAnalyzer
         foreach (var (file, packageManager, framework) in Probes)
         {
             var path = Path.Combine(root.FullName, file);
-            if (!File.Exists(path))
+            if (!File.Exists(path) && !Directory.Exists(path))
             {
                 continue;
             }
@@ -68,7 +68,12 @@ public static partial class DeployAnalyzer
         }
 
         ReadNodeVersion(root, runtimeVersions);
-        ReadPythonVersion(root, runtimeVersions);
+        if (File.Exists(Path.Combine(root.FullName, "requirements.txt"))
+            || File.Exists(Path.Combine(root.FullName, "pyproject.toml")))
+        {
+            ReadPythonVersion(root, runtimeVersions);
+        }
+
         ReadGoVersion(root, runtimeVersions);
         ReadDockerImage(root, runtimeVersions);
 
@@ -129,13 +134,16 @@ public static partial class DeployAnalyzer
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             if (document.RootElement.TryGetProperty("engines", out var engines)
-                && engines.TryGetProperty("node", out var node))
+                && engines.ValueKind == JsonValueKind.Object
+                && engines.TryGetProperty("node", out var node)
+                && node.ValueKind != JsonValueKind.Null)
             {
-                versions["node"] = node.GetString();
+                versions["node"] = node.ValueKind == JsonValueKind.String ? node.GetString() : node.GetRawText();
             }
         }
-        catch (Exception exception) when (exception is JsonException or IOException)
+        catch (Exception)
         {
+            // 不可读的 package.json 不应让整体分析失败
         }
     }
 
@@ -150,13 +158,9 @@ public static partial class DeployAnalyzer
 
         try
         {
-            var version = File.ReadAllText(path).Trim();
-            if (!string.IsNullOrWhiteSpace(version))
-            {
-                versions["python"] = version;
-            }
+            versions["python"] = File.ReadAllText(path).Trim();
         }
-        catch (IOException)
+        catch (Exception)
         {
         }
     }
@@ -221,7 +225,7 @@ public static partial class DeployAnalyzer
     /// <summary>匹配 go.mod 中的 Go 版本声明。</summary>
     private static partial Regex GoVersionRegex();
 
-    [GeneratedRegex(@"FROM\s+node:?(\S+)")]
+    [GeneratedRegex(@"FROM node:?(\S+)")]
     /// <summary>匹配 Dockerfile 中的 Node 基础镜像。</summary>
     private static partial Regex NodeImageRegex();
 

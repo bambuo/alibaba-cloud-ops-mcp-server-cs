@@ -62,13 +62,13 @@ public sealed class CmsToolsTests
     private static (CmsTools Tools, RecordingCaller Caller) Create()
     {
         var options = ServerOptions.Parse([]);
-        var meta = new ApiMetaClient(new HttpClient(), NullLogger<ApiMetaClient>.Instance);
+        var meta = new ApiMetaClient(new HttpClient(), options, TimeProvider.System, NullLogger<ApiMetaClient>.Instance);
         var caller = new RecordingCaller(meta, new EndpointResolver(options));
         return (new CmsTools(caller, NullLogger<CmsTools>.Instance), caller);
     }
 
     private sealed class RecordingCaller(ApiMetaClient meta, EndpointResolver resolver)
-        : GenericApiCaller(meta, resolver, new StaticCredentials(), NullLogger<GenericApiCaller>.Instance)
+        : GenericApiCaller(meta, resolver, new StaticCredentials(), TimeProvider.System, NullLogger<GenericApiCaller>.Instance)
     {
         public string? Service { get; private set; }
 
@@ -96,5 +96,7 @@ public sealed class CmsToolsTests
     private sealed class StaticCredentials : ICredentialProvider
     {
         public CloudCredentials Resolve() => new("ak", "sk", null, "test");
+
+        public CloudCredentials ResolveForOss() => Resolve();
     }
 }

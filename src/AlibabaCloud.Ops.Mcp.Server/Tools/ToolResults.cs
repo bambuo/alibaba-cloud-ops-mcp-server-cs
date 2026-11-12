@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AlibabaCloud.Ops.Mcp.Server.Cloud;
 using ModelContextProtocol.Protocol;
 
 namespace AlibabaCloud.Ops.Mcp.Server.Tools;
@@ -20,15 +21,28 @@ internal static class ToolResults
         IsError = false,
     };
 
-    /// <summary>构造 isError 结果。</summary>
-    public static CallToolResult Error(string message) => new()
+    /// <summary>构造 isError 结果，载荷为 {Code,Message,RequestId?} JSON。</summary>
+    public static CallToolResult Error(string code, string message, string? requestId = null)
     {
-        Content = [new TextContentBlock { Text = message }],
-        IsError = true,
-    };
+        var body = new JsonObject { ["Code"] = code, ["Message"] = message };
+        if (!string.IsNullOrWhiteSpace(requestId))
+        {
+            body["RequestId"] = requestId;
+        }
 
-    /// <summary>用异常消息构造错误结果。</summary>
-    public static CallToolResult Error(Exception exception) => Error(exception.Message);
+        return new CallToolResult
+        {
+            Content = [new TextContentBlock { Text = body.ToJsonString() }],
+            IsError = true,
+        };
+    }
+
+    /// <summary>按异常类型映射错误码后构造错误结果。</summary>
+    public static CallToolResult Error(Exception exception)
+    {
+        var failure = CloudErrors.FromSdk(exception);
+        return Error(failure.Code, failure.Message, failure.RequestId);
+    }
 
     /// <summary>在任意层级按名称（忽略大小写）查找字段。</summary>
     public static JsonNode? Find(JsonNode? node, string propertyName)

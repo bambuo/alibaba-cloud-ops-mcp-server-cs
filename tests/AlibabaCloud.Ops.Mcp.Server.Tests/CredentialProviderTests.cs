@@ -52,18 +52,30 @@ public sealed class CredentialProviderTests
         var provider = Create(ServerOptions.Parse(["--headers-credential-only"]), new DefaultHttpContext());
 
         var exception = Assert.Throws<MissingCredentialsException>(() => provider.Resolve());
-        Assert.Contains("headers-credential-only", exception.Message);
+        Assert.Contains("No Alibaba Cloud credential available in request headers.", exception.Message);
+        Assert.Equal("CredentialMissing", exception.Code);
     }
 
     [Fact]
-    public void Ignores_incomplete_header_credentials()
+    public void Accepts_header_credentials_with_id_only()
     {
         var context = new DefaultHttpContext();
         context.Request.Headers["x-acs-accesskey-id"] = "only-id";
 
         var provider = Create(ServerOptions.Parse(["--headers-credential-only"]), context);
 
+        var credentials = provider.Resolve();
+        Assert.Equal("only-id", credentials.AccessKeyId);
+        Assert.Equal("headers", credentials.Source);
+    }
+
+    [Fact]
+    public void Oss_ignores_headers_only_restriction()
+    {
+        var provider = Create(ServerOptions.Parse(["--headers-credential-only"]), new DefaultHttpContext());
+
         Assert.Throws<MissingCredentialsException>(() => provider.Resolve());
+        Assert.Throws<MissingCredentialsException>(() => provider.ResolveForOss());
     }
 
     [Fact]
