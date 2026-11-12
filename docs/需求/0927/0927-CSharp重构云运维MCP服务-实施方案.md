@@ -246,7 +246,7 @@ public Task<DeployResult> DeployAsync(
 
 | 场景 | 返回 | 日志 |
 |---|---|---|
-| 统一错误载荷 | `isError: true`，文本为 JSON `{"Code","Message","RequestId"?}`，与 Java 侧一致 | 不含凭据 |
+| 统一错误载荷 | `isError: true`，文本为 JSON `{"Code","Message","RequestId"?}`，结构与上游异常体一致，与 Java 侧逐字段一致 | 不含凭据 |
 | 参数缺失或非法 | `Code=InvalidParameter`，消息含参数名 | Warning |
 | 凭证缺失 | `Code=CredentialMissing` | Warning |
 | 阿里云 4xx/5xx | 保留 SDK 的 `Code` 与 `Message`，可取到时带 `RequestId` | Error |
@@ -331,7 +331,7 @@ public Task<DeployResult> DeployAsync(
 | E7 | `ForeceStop` | 拼写错误 | 保持原样 | 待确认 Q2 |
 | E8 | `OSS_PutObject` | 未注册 | 不注册 | 待确认 Q3 |
 | E9 | 工具注解 | 无 | 仅动态工具标注只读/破坏性/幂等 | 与 Java 一致，静态工具两侧均无注解 |
-| E10 | 错误封装 | 纯文本 `Error calling tool ...` | JSON `{Code,Message,RequestId?}` | 用户裁定统一为结构化 JSON，两侧一致 |
+| E10 | 错误封装 | 异常体为 `{"Message","Code"}` JSON（键序 Message、Code，无 RequestId）；FastMCP 是否再加 `Error calling tool '<name>': ` 前缀未实测 | JSON `{Code,Message,RequestId?}` | 结构与上游一致，键序与 RequestId 处理不同 |
 | E11 | OSS 建桶/删桶响应元数据 | 含 `request_id`/`headers` | .NET SDK 不暴露，`request_id` 为空串、`headers` 为空对象 | SDK 限制，字段集保持一致 |
 | E12 | OSS 桶扩展字段 | ListBuckets 直接返回 | .NET SDK 只解析 name/location/creation_date，其余按桶 `GetBucketInfo` 补齐，无权限时为 null | SDK 限制，尽力补齐 |
 | E13 | OSS User-Agent | 追加服务名后缀 | .NET SDK `ClientConfiguration.UserAgent` 只读，保留 SDK 默认 | SDK 限制 |
