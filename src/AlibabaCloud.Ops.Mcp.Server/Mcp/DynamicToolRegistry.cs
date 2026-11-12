@@ -1,3 +1,4 @@
+using System.Reflection;
 using AlibabaCloud.Ops.Mcp.Server.Options;
 using AlibabaCloud.Ops.Mcp.Server.Tools;
 using Microsoft.Extensions.Logging;
@@ -12,6 +13,17 @@ public sealed class DynamicToolRegistry(
     ILogger<DynamicToolRegistry> logger)
 {
     private readonly List<McpServerTool> _tools = [];
+
+    // 白名单模式同样会注册这些静态工具类（含仅白名单模式注册的 InstanceTools），
+    // 命中时不再生成同名动态工具，与上游 visible-tools 的注册顺序一致。
+    internal static readonly IReadOnlySet<string> StaticToolNames = typeof(DynamicToolRegistry).Assembly
+        .GetTypes()
+        .Where(type => type.GetCustomAttributes(typeof(McpServerToolTypeAttribute), inherit: false).Any())
+        .SelectMany(type => type.GetMethods())
+        .Select(method => method.GetCustomAttribute<McpServerToolAttribute>()?.Name)
+        .Where(name => name is not null)
+        .Select(name => name!)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
     private static readonly (string Service, string Api)[] DefaultApis =
     [
         ("ecs", "DescribeInstances"),
@@ -68,6 +80,11 @@ public sealed class DynamicToolRegistry(
         {
             foreach (var name in options.VisibleToolNames)
             {
+                if (StaticToolNames.Contains(name))
+                {
+                    continue;
+                }
+
                 var separator = name.IndexOf('_');
                 if (separator <= 0 || separator == name.Length - 1)
                 {

@@ -15,7 +15,7 @@ public sealed class ToolOptionsSetupTests
     [Fact]
     public async Task Dynamic_tools_are_reapplied_to_each_new_collection()
     {
-        var options = ServerOptions.Parse(["--visible-tools", "ECS_DescribeInstances"]);
+        var options = ServerOptions.Parse(["--visible-tools", "ECS_DescribeRegions"]);
         var registry = CreateRegistry(options);
         await registry.RegisterAsync(CancellationToken.None);
         var setup = new ToolOptionsSetup(options, registry);
@@ -25,8 +25,28 @@ public sealed class ToolOptionsSetupTests
         setup.PostConfigure(null, first);
         setup.PostConfigure(null, second);
 
-        Assert.Equal(["ECS_DescribeInstances"], Names(first));
-        Assert.Equal(["ECS_DescribeInstances"], Names(second));
+        Assert.Equal(["ECS_DescribeRegions"], Names(first));
+        Assert.Equal(["ECS_DescribeRegions"], Names(second));
+    }
+
+    [Fact]
+    public async Task Lowercase_whitelisted_static_tool_does_not_create_dynamic_tool()
+    {
+        var options = ServerOptions.Parse(["--visible-tools", "oos_runcommand"]);
+        var registry = CreateRegistry(options);
+        await registry.RegisterAsync(CancellationToken.None);
+
+        var mcpOptions = new McpServerOptions
+        {
+            ToolCollection = new McpServerPrimitiveCollection<McpServerTool>
+            {
+                FakeTool("OOS_RunCommand"),
+            },
+        };
+        var setup = new ToolOptionsSetup(options, registry);
+        setup.PostConfigure(null, mcpOptions);
+
+        Assert.Equal(["OOS_RunCommand"], Names(mcpOptions));
     }
 
     [Fact]

@@ -87,6 +87,13 @@ static void RegisterStaticTools(IMcpServerBuilder mcp, ServerOptions options)
         .WithTools<LocalTools>()
         .WithTools<CodeDeployTools>();
 
+    // 上游 visible-tools 模式会加载 application_management_tools，含静态 ECS_DescribeInstances；
+    // 白名单过滤在 PostConfigure 完成，未命中时会被移除。
+    if (options.VisibleToolNames.Count > 0)
+    {
+        mcp.WithTools<InstanceTools>();
+    }
+
     if (options.ServiceCodes.Count > 0)
     {
         mcp.WithTools<CommonTools>();

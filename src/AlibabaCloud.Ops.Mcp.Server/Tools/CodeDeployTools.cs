@@ -42,7 +42,7 @@ public sealed class CodeDeployTools(
         [Description("Local file path to upload. If the file is not in .code_deploy/release directory, it will be copied there.")] string file_path,
         [Description("Deploy language, like:docker, java, python, nodejs, golang")] string deploy_language,
         [Description("Application listening port")] int port,
-        [Description("Root path of the project. The .code_deploy directory will be created in this path.")] string? project_path = null,
+        [Description("Root path of the project. The .code_deploy directory will be created in this path.")] string project_path,
         [Description("**OPTIONAL - DO NOT PROVIDE UNLESS USER EXPLICITLY REQUIRES IT** Application start command script.")] string? application_start = null,
         [Description("**OPTIONAL - DO NOT PROVIDE UNLESS USER EXPLICITLY REQUIRES IT** Application stop command script.")] string? application_stop = null,
         [Description("AlibabaCloud ECS instance ID List. If empty or not provided, user will be prompted to create ECS instances.")] List<string>? instance_ids = null,
@@ -89,10 +89,20 @@ public sealed class CodeDeployTools(
 
             if (string.IsNullOrWhiteSpace(application_start))
             {
-                return ToolResults.Error("START_COMMAND_REQUIRED: provide application_start manually");
+                return ToolResults.Text(BuildStartCommandRequired(file_path, deploy_language));
             }
 
-            var bucket = await EnsureBucketAsync(name, cancellationToken);
+            string bucket;
+            try
+            {
+                bucket = await EnsureBucketAsync(name, cancellationToken);
+            }
+            catch (Aliyun.OSS.Common.OssException exception)
+            {
+                logger.LogWarning("OSS bucket unavailable for {Name}: {Message}", name, exception.Message);
+                return ToolResults.Text(BuildOssNotActivated());
+            }
+
             var versionId = Upload(bucket, object_name, releasePath);
 
             await EnsureApplicationAsync(name, cancellationToken);
@@ -524,6 +534,53 @@ public sealed class CodeDeployTools(
             https://ecs.console.aliyun.com/?regionId={regionId}#/server/instance
             """,
     };
+
+    /// <summary>启动命令无法自动生成时返回引导用户手填的结构化结果。</summary>
+    internal static JsonObject BuildStartCommandRequired(string filePath, string deployLanguage) => new()
+    {
+        ["error"] = "START_COMMAND_REQUIRED",
+        ["message"] = "无法通过规则引擎自动生成启动命令，请手动提供 application_start 参数并再次调用OOS_CodeDeploy",
+        ["file_path"] = filePath,
+        ["deploy_language"] = deployLanguage,
+        ["instructions"] = $"""
+            ## 启动命令生成失败
+
+            系统尝试通过规则引擎自动生成启动命令，但未能成功识别。
+
+            **文件路径**: {filePath}
+            **部署语言**: {deployLanguage}
+
+            请根据以下信息手动提供启动命令：
+            1. 如果文件是压缩包（tar.gz、zip等），需要先解压
+            2. 启动命令必须包含防御性检查（检查文件/路径是否存在）
+            3. 启动命令必须使用后台运行并重定向日志：`nohup <command> > /root/app.log 2>&1 &`
+
+            示例：
+            - Java: `[ -f app.tar.gz ] && tar -xzf app.tar.gz && [ -f app/app.jar ] && nohup java -jar app/app.jar > /root/app.log 2>&1 &`
+            - Python: `[ -f app.tar.gz ] && tar -xzf app.tar.gz && [ -f app/app.py ] && nohup python app/app.py > /root/app.log 2>&1 &`
+            - Node.js: `[ -f app.tar.gz ] && tar -xzf app.tar.gz && [ -f app/package.json ] && nohup npm start > /root/app.log 2>&1 &`
+            """,
+    };
+
+    /// <summary>OSS 服务不可用时返回开通引导。</summary>
+    internal static JsonObject BuildOssNotActivated()
+    {
+        const string consoleLink = "https://oss.console.aliyun.com/";
+        return new JsonObject
+        {
+            ["error"] = "OSS_SERVICE_NOT_ACTIVATED",
+            ["message"] = "用户的阿里云OSS服务未开通，需要点击链接进行开通",
+            ["oss_console_link"] = consoleLink,
+            ["instructions"] = $"""
+                ## OSS服务未开通
+
+                您的阿里云OSS服务尚未开通，请点击以下链接进行开通：
+                [{consoleLink}]({consoleLink})
+
+                开通后，请重新尝试部署操作。
+                """,
+        };
+    }
 
     /// <summary>生成部署成功后的安全组配置指引。</summary>
     private static string SecurityGroupInstructions(int port, string serviceLink, string securityGroupLink) => $"""

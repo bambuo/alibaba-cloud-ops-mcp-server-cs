@@ -61,6 +61,18 @@ public sealed class SchemaAndCatalogTests
     }
 
     [Fact]
+    public void Code_deploy_project_path_is_required()
+    {
+        var parameter = typeof(CodeDeployTools)
+            .GetMethod(nameof(CodeDeployTools.CodeDeploy))!
+            .GetParameters()
+            .Single(item => item.Name == "project_path");
+
+        Assert.False(parameter.IsOptional);
+        Assert.False(parameter.HasDefaultValue);
+    }
+
+    [Fact]
     public void Preserves_upstream_parameter_names()
     {
         var method = typeof(OosTools).GetMethod(nameof(OosTools.StopInstances))!;
