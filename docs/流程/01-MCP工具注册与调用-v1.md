@@ -27,8 +27,8 @@ flowchart TD
     A[解析 CLI 参数] --> B{"--code-deploy?"}
     B -->|是| C[仅注册 7 个部署相关工具]
     B -->|否| D{"--visible-tools 非空?"}
-    D -->|是| E[注册白名单命中的静态工具]
-    E --> F[解析白名单中的 服务码_API 项]
+    D -->|是| E[注册白名单命中的静态工具<br/>含静态 ECS_DescribeInstances]
+    E --> F["解析白名单中的 服务码_API 项<br/>跳过已命中的静态工具名"]
     F --> G[拉取元数据并注册动态工具]
     G --> H[合并 --extra-config 中白名单内的项]
     D -->|否| I[注册静态工具<br/>跳过静态 ECS_DescribeInstances]
@@ -46,7 +46,7 @@ flowchart TD
     P -->|streamable-http| R[监听 host:port/mcp]
 ```
 
-注册冲突规则：`--code-deploy` 与 `--visible-tools` 同时出现时，前者优先，后者被忽略并记录告警。
+注册冲突规则：`--code-deploy` 与 `--visible-tools` 同时出现时，前者优先，后者被忽略并记录告警。白名单按名称大小写不敏感匹配静态工具；已命中的静态名称不再参与动态工具解析，因此在白名单模式下 `ECS_DescribeInstances` 使用静态版本的两参数 schema。
 
 实现要点：动态工具与白名单在 `McpServerOptions` 的 PostConfigure 阶段应用；无状态 HTTP 每个请求重建工具集合时按同一规则回填，stdio 只在启动时注册一次。
 

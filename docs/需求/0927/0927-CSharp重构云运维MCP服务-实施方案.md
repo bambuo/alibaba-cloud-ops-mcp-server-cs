@@ -327,7 +327,7 @@ public Task<DeployResult> DeployAsync(
 | 项 | 结果 |
 |---|---|
 | 构建 | `dotnet build` 通过，Release 构建干净 |
-| 测试 | 100 项通过，0 失败 |
+| 测试 | 104 项通过，0 失败 |
 | 工具面 | 默认 40、`--services` 44、`--code-deploy` 7、白名单 3（stdio 实测） |
 | 传输 | stdio 与无状态 HTTP 工具面一致：默认 40、白名单 3、`--code-deploy` 7（HTTP 实测） |
 | 版本 | 包版本与 `serverInfo.version` 均为 0.9.27，与上游发布号一致 |
